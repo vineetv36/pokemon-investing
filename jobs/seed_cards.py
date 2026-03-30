@@ -25,12 +25,29 @@ SEED_CARDS = [
 ]
 
 
+def cleanup_duplicates(conn):
+    """Remove duplicate cards, keeping the lowest id for each (name, set, number)."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """DELETE FROM cards WHERE id NOT IN (
+            SELECT MIN(id) FROM cards GROUP BY name, set_name, card_number
+        )"""
+    )
+    removed = cursor.rowcount
+    if removed > 0:
+        print(f"  Cleaned up {removed} duplicate card entries.")
+    conn.commit()
+
+
 def seed():
     """Insert seed cards into the database."""
     init_db()
     conn = get_connection()
-    cursor = conn.cursor()
 
+    # Clean up any existing duplicates first
+    cleanup_duplicates(conn)
+
+    cursor = conn.cursor()
     inserted = 0
     for card in SEED_CARDS:
         try:

@@ -4,10 +4,11 @@ CREATE TABLE IF NOT EXISTS cards (
     name TEXT NOT NULL,
     set_name TEXT,
     card_number TEXT,
-    tcgplayer_id TEXT UNIQUE,
+    tcgplayer_id TEXT,
     image_url TEXT,
     is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(name, set_name, card_number)
 );
 
 -- Raw NM prices (from PokemonPriceTracker)
