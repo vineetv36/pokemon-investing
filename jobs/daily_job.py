@@ -1,7 +1,6 @@
 """Daily job orchestrator — runs all scrapers, analysis, and scoring."""
 
 import argparse
-import asyncio
 import logging
 import sys
 import os
@@ -24,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_active_cards() -> list[dict]:
+def get_active_cards():
     """Fetch all active cards from the watchlist."""
     conn = get_connection()
     cursor = conn.cursor()
@@ -34,12 +33,12 @@ def get_active_cards() -> list[dict]:
     return cards
 
 
-async def scrape_130point_for_card(card: dict, days_back: int = 7):
+def scrape_130point_for_card(card, days_back=7):
     """Scrape 130point for both PSA 10 and raw sales of a card."""
     card_id = card["id"]
 
     # PSA 10 sales
-    psa10_sales = await scrape_card_sales(
+    psa10_sales = scrape_card_sales(
         card["name"], card["set_name"], card["card_number"],
         grade="PSA 10", days_back=days_back,
     )
@@ -48,7 +47,7 @@ async def scrape_130point_for_card(card: dict, days_back: int = 7):
         logger.info("Card %s: %d PSA 10 sales found", card["name"], len(psa10_sales))
 
     # Raw NM sales
-    raw_sales = await scrape_card_sales(
+    raw_sales = scrape_card_sales(
         card["name"], card["set_name"], card["card_number"],
         grade="RAW", days_back=days_back,
     )
@@ -70,7 +69,7 @@ async def scrape_130point_for_card(card: dict, days_back: int = 7):
         logger.info("Card %s: %d raw sales found", card["name"], len(raw_sales))
 
 
-async def run_daily_job(days_back: int = 7):
+def run_daily_job(days_back=7):
     """Run the full daily job pipeline."""
     logger.info("=== Starting daily job (lookback: %d days) ===", days_back)
     start_time = time.time()
@@ -87,7 +86,7 @@ async def run_daily_job(days_back: int = 7):
     logger.info("--- Step 1: Scraping 130point.com ---")
     for card in cards:
         try:
-            await scrape_130point_for_card(card, days_back)
+            scrape_130point_for_card(card, days_back)
         except Exception as e:
             logger.error("Error scraping 130point for %s: %s", card["name"], e)
 
@@ -154,7 +153,7 @@ def main():
         help="Number of days to look back (default: 7)",
     )
     args = parser.parse_args()
-    asyncio.run(run_daily_job(days_back=args.backfill))
+    run_daily_job(days_back=args.backfill)
 
 
 if __name__ == "__main__":

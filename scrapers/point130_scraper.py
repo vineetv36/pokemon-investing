@@ -5,6 +5,10 @@ import random
 import re
 import time
 from datetime import date, datetime, timedelta
+from typing import List
+
+import httpx
+from bs4 import BeautifulSoup
 
 from db import get_connection
 
@@ -12,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 MAX_REQUESTS_PER_SESSION = 100
 _request_count = 0
+
+USER_AGENT = "psa10-dashboard/1.0 (personal research project)"
 
 
 def _should_skip_listing(title: str) -> bool:
@@ -38,7 +44,7 @@ def _is_raw_listing(title: str) -> bool:
     return any(term in title_lower for term in ["nm", "near mint", "raw"])
 
 
-def _filter_outliers_iqr(prices: list[float]) -> list[float]:
+def _filter_outliers_iqr(prices: list) -> list:
     """Remove statistical outliers using IQR method."""
     if len(prices) < 4:
         return prices
@@ -51,10 +57,10 @@ def _filter_outliers_iqr(prices: list[float]) -> list[float]:
     return [p for p in prices if lower <= p <= upper]
 
 
-async def scrape_card_sales(card_name: str, set_name: str, card_number: str,
-                            grade: str = "PSA 10", days_back: int = 7) -> list[dict]:
+def scrape_card_sales(card_name: str, set_name: str, card_number: str,
+                      grade: str = "PSA 10", days_back: int = 7) -> list:
     """
-    Scrape 130point.com for recent sold listings of a card.
+    Scrape 130point.com for recent sold listings of a card using httpx + BeautifulSoup.
 
     Args:
         card_name: Card name (e.g. "Charizard")
@@ -72,12 +78,6 @@ async def scrape_card_sales(card_name: str, set_name: str, card_number: str,
         logger.warning("Max requests per session reached (%d). Stopping.", MAX_REQUESTS_PER_SESSION)
         return []
 
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        logger.error("playwright not installed. Run: pip install playwright && playwright install chromium")
-        return []
-
     search_query = f"{card_name} {set_name} {card_number}"
     if grade == "PSA 10":
         search_query += " PSA 10"
@@ -85,29 +85,38 @@ async def scrape_card_sales(card_name: str, set_name: str, card_number: str,
     results = []
     cutoff_date = date.today() - timedelta(days=days_back)
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(
-            user_agent="psa10-dashboard/1.0 (personal research project)"
+    url = f"https://130point.com/sales/"
+    params = {"query": search_query}
+
+    logger.info("Scraping 130point: %s?query=%s", url, search_query)
+
+    try:
+        response = httpx.get(
+            url,
+            params=params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=30,
+            follow_redirects=True,
         )
+        response.raise_for_status()
+        _request_count += 1
 
-        url = f"https://130point.com/sales/?query={search_query.replace(' ', '+')}"
-        logger.info("Scraping 130point: %s", url)
+        soup = BeautifulSoup(response.text, "html.parser")
 
-        try:
-            await page.goto(url, timeout=30000)
-            await page.wait_for_selector("table", timeout=15000)
-
-            rows = await page.query_selector_all("table tbody tr")
-
+        # Find all tables and look for sales data rows
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
             for row in rows:
-                cells = await row.query_selector_all("td")
-                if len(cells) < 4:
+                cells = row.find_all("td")
+                if len(cells) < 3:
                     continue
 
-                title = await cells[0].inner_text()
-                price_text = await cells[1].inner_text()
-                date_text = await cells[2].inner_text()
+                title = cells[0].get_text(strip=True)
+                price_text = cells[1].get_text(strip=True)
+                date_text = cells[2].get_text(strip=True)
+
+                if not title or not price_text:
+                    continue
 
                 if _should_skip_listing(title):
                     continue
@@ -124,16 +133,16 @@ async def scrape_card_sales(card_name: str, set_name: str, card_number: str,
                     continue
                 sale_price = float(price_match.group(1).replace(",", ""))
 
-                # Parse date
-                try:
-                    sale_date = datetime.strptime(date_text.strip(), "%m/%d/%Y").date()
-                except ValueError:
+                # Parse date (try multiple formats)
+                sale_date = None
+                for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d, %Y"):
                     try:
-                        sale_date = datetime.strptime(date_text.strip(), "%Y-%m-%d").date()
+                        sale_date = datetime.strptime(date_text.strip(), fmt).date()
+                        break
                     except ValueError:
                         continue
 
-                if sale_date < cutoff_date:
+                if sale_date is None or sale_date < cutoff_date:
                     continue
 
                 results.append({
@@ -143,23 +152,24 @@ async def scrape_card_sales(card_name: str, set_name: str, card_number: str,
                     "grade": grade,
                     "sale_price": sale_price,
                     "sale_date": sale_date,
-                    "listing_title": title.strip(),
+                    "listing_title": title,
                     "source": "130point",
                 })
 
-        except Exception as e:
-            logger.error("Error scraping 130point for %s: %s", card_name, e)
-        finally:
-            await browser.close()
-            _request_count += 1
+    except httpx.HTTPStatusError as e:
+        logger.error("HTTP error scraping 130point for %s: %s", card_name, e)
+    except httpx.RequestError as e:
+        logger.error("Request error scraping 130point for %s: %s", card_name, e)
+    except Exception as e:
+        logger.error("Error scraping 130point for %s: %s", card_name, e)
 
     # Delay between requests
-    time.sleep(random.uniform(2, 5))
+    time.sleep(random.uniform(3, 6))
 
     return results
 
 
-def store_psa10_sales(card_id: int, sales: list[dict]):
+def store_psa10_sales(card_id: int, sales: list):
     """Store PSA 10 sales in the database."""
     conn = get_connection()
     cursor = conn.cursor()
@@ -181,7 +191,7 @@ def store_psa10_sales(card_id: int, sales: list[dict]):
     return inserted
 
 
-def get_cached_sales(card_id: int, since_date: date) -> list[dict]:
+def get_cached_sales(card_id: int, since_date: date) -> bool:
     """Check if we already have recent sales cached."""
     conn = get_connection()
     cursor = conn.cursor()
