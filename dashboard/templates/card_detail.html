@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ card.name }} — PSA 10 Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        a { color: #60a5fa; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .breadcrumb { margin-bottom: 16px; font-size: 0.875rem; }
+        .card-header { display: flex; gap: 24px; align-items: center; margin-bottom: 32px; }
+        .card-header h1 { font-size: 2rem; color: #fbbf24; }
+        .card-header .set-info { color: #94a3b8; font-size: 1rem; }
+        .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 32px; }
+        .metric { background: #1e293b; border-radius: 12px; padding: 20px; }
+        .metric .label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
+        .metric .value { font-size: 1.75rem; font-weight: 700; margin-top: 4px; }
+        .positive { color: #22c55e; }
+        .negative { color: #ef4444; }
+        .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 32px; }
+        .chart-box { background: #1e293b; border-radius: 12px; padding: 20px; }
+        .chart-box h3 { margin-bottom: 16px; color: #94a3b8; font-size: 0.875rem; text-transform: uppercase; }
+        .full-width { grid-column: 1 / -1; }
+        table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; margin-bottom: 24px; }
+        thead { background: #334155; }
+        th { padding: 10px 14px; text-align: left; font-size: 0.75rem; text-transform: uppercase; color: #94a3b8; }
+        td { padding: 10px 14px; border-top: 1px solid #334155; font-size: 0.875rem; }
+        h2 { margin-bottom: 16px; color: #e2e8f0; }
+        .na { color: #64748b; }
+        @media (max-width: 768px) { .charts { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="breadcrumb"><a href="/">Dashboard</a> / {{ card.name }}</div>
+
+        <div class="card-header">
+            <div>
+                <h1>{{ card.name }}</h1>
+                <div class="set-info">{{ card.set_name }} #{{ card.card_number }}</div>
+            </div>
+        </div>
+
+        <div class="metrics">
+            <div class="metric">
+                <div class="label">PSA 10 Avg (30d)</div>
+                <div class="value">
+                    {% if card.psa10_history %}
+                        ${{ "%.2f" | format(card.psa10_history[0].avg_price) }}
+                    {% else %}<span class="na">—</span>{% endif %}
+                </div>
+            </div>
+            <div class="metric">
+                <div class="label">Raw NM Price</div>
+                <div class="value">
+                    {% if card.raw_history %}
+                        ${{ "%.2f" | format(card.raw_history[0].price) }}
+                    {% else %}<span class="na">—</span>{% endif %}
+                </div>
+            </div>
+            <div class="metric">
+                <div class="label">Current Ratio</div>
+                <div class="value" style="color: #fbbf24;">
+                    {% if card.ratio_history %}
+                        {{ "%.1f" | format(card.ratio_history[0].ratio) }}x
+                    {% else %}<span class="na">—</span>{% endif %}
+                </div>
+            </div>
+            <div class="metric">
+                <div class="label">7d Ratio Change</div>
+                <div class="value">
+                    {% if card.ratio_history and card.ratio_history[0].ratio_7d_change is not none %}
+                        <span class="{{ 'positive' if card.ratio_history[0].ratio_7d_change > 0 else 'negative' }}">
+                            {{ "%+.2f" | format(card.ratio_history[0].ratio_7d_change) }}
+                        </span>
+                    {% else %}<span class="na">—</span>{% endif %}
+                </div>
+            </div>
+            <div class="metric">
+                <div class="label">Sentiment (7d)</div>
+                <div class="value">
+                    {% if card.sentiment_history %}
+                        <span class="{{ 'positive' if card.sentiment_history[0].weighted_sentiment > 0 else 'negative' }}">
+                            {{ "%.2f" | format(card.sentiment_history[0].weighted_sentiment) }}
+                        </span>
+                    {% else %}<span class="na">—</span>{% endif %}
+                </div>
+            </div>
+            <div class="metric">
+                <div class="label">Reddit Mentions (7d)</div>
+                <div class="value">
+                    {% if card.sentiment_history %}
+                        {{ card.sentiment_history[0].mention_count }}
+                    {% else %}<span class="na">0</span>{% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="charts">
+            <div class="chart-box">
+                <h3>PSA 10 Price History</h3>
+                <canvas id="psa10Chart"></canvas>
+            </div>
+            <div class="chart-box">
+                <h3>Raw NM Price History</h3>
+                <canvas id="rawChart"></canvas>
+            </div>
+            <div class="chart-box full-width">
+                <h3>Price Ratio Over Time</h3>
+                <canvas id="ratioChart"></canvas>
+            </div>
+            <div class="chart-box">
+                <h3>Reddit Mentions & Sentiment</h3>
+                <canvas id="sentimentChart"></canvas>
+            </div>
+        </div>
+
+        <h2>Recent PSA 10 Sales</h2>
+        <table>
+            <thead>
+                <tr><th>Date</th><th>Price</th><th>Listing Title</th><th>Source</th></tr>
+            </thead>
+            <tbody>
+                {% for sale in card.recent_sales %}
+                <tr>
+                    <td>{{ sale.sale_date }}</td>
+                    <td>${{ "%.2f" | format(sale.sale_price) }}</td>
+                    <td>{{ sale.listing_title[:80] }}{% if sale.listing_title|length > 80 %}...{% endif %}</td>
+                    <td>{{ sale.source }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="na">No sales data yet</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <h2>Recent Reddit Mentions</h2>
+        <table>
+            <thead>
+                <tr><th>Date</th><th>Subreddit</th><th>Title</th><th>Score</th><th>Sentiment</th></tr>
+            </thead>
+            <tbody>
+                {% for m in card.reddit_mentions %}
+                <tr>
+                    <td>{{ m.created_utc[:10] if m.created_utc else '—' }}</td>
+                    <td>r/{{ m.subreddit }}</td>
+                    <td>{{ m.post_title[:60] }}{% if m.post_title|length > 60 %}...{% endif %}</td>
+                    <td>{{ m.score }}</td>
+                    <td>
+                        {% if m.sentiment_label %}
+                            <span class="{{ 'positive' if m.sentiment_label == 'positive' else ('negative' if m.sentiment_label == 'negative' else 'na') }}">
+                                {{ m.sentiment_label }} ({{ "%.2f" | format(m.sentiment_score) }})
+                            </span>
+                        {% else %}<span class="na">—</span>{% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="na">No Reddit mentions yet</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const chartOptions = {
+            responsive: true,
+            plugins: { legend: { labels: { color: '#94a3b8' } } },
+            scales: {
+                x: { ticks: { color: '#64748b' }, grid: { color: '#1e293b' } },
+                y: { ticks: { color: '#64748b' }, grid: { color: '#334155' } }
+            }
+        };
+
+        // PSA 10 Price Chart
+        const psa10Data = {{ card.psa10_history | tojson }};
+        if (psa10Data.length) {
+            new Chart(document.getElementById('psa10Chart'), {
+                type: 'line',
+                data: {
+                    labels: psa10Data.map(d => d.recorded_date).reverse(),
+                    datasets: [{
+                        label: 'PSA 10 Avg Price',
+                        data: psa10Data.map(d => d.avg_price).reverse(),
+                        borderColor: '#fbbf24',
+                        tension: 0.3
+                    }]
+                },
+                options: chartOptions
+            });
+        }
+
+        // Raw Price Chart
+        const rawData = {{ card.raw_history | tojson }};
+        if (rawData.length) {
+            new Chart(document.getElementById('rawChart'), {
+                type: 'line',
+                data: {
+                    labels: rawData.map(d => d.recorded_date).reverse(),
+                    datasets: [{
+                        label: 'Raw NM Price',
+                        data: rawData.map(d => d.price).reverse(),
+                        borderColor: '#60a5fa',
+                        tension: 0.3
+                    }]
+                },
+                options: chartOptions
+            });
+        }
+
+        // Ratio Chart
+        const ratioData = {{ card.ratio_history | tojson }};
+        if (ratioData.length) {
+            new Chart(document.getElementById('ratioChart'), {
+                type: 'line',
+                data: {
+                    labels: ratioData.map(d => d.recorded_date).reverse(),
+                    datasets: [{
+                        label: 'PSA 10 / Raw Ratio',
+                        data: ratioData.map(d => d.ratio).reverse(),
+                        borderColor: '#22c55e',
+                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: chartOptions
+            });
+        }
+
+        // Sentiment Chart
+        const sentData = {{ card.sentiment_history | tojson }};
+        if (sentData.length) {
+            new Chart(document.getElementById('sentimentChart'), {
+                type: 'bar',
+                data: {
+                    labels: sentData.map(d => d.recorded_date).reverse(),
+                    datasets: [
+                        {
+                            label: 'Sentiment',
+                            data: sentData.map(d => d.weighted_sentiment).reverse(),
+                            backgroundColor: sentData.map(d => d.weighted_sentiment > 0 ? '#22c55e' : '#ef4444').reverse()
+                        },
+                        {
+                            label: 'Mentions',
+                            data: sentData.map(d => d.mention_count).reverse(),
+                            backgroundColor: '#3b82f6',
+                            type: 'line',
+                            yAxisID: 'y1'
+                        }
+                    ]
+                },
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        ...chartOptions.scales,
+                        y1: { position: 'right', ticks: { color: '#64748b' }, grid: { display: false } }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>

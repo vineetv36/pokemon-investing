@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PSA 10 Pokemon Card Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        header { text-align: center; padding: 30px 0; }
+        header h1 { font-size: 2rem; color: #fbbf24; }
+        header p { color: #94a3b8; margin-top: 8px; }
+        .stats-bar { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+        .stat-card { background: #1e293b; border-radius: 12px; padding: 16px 24px; flex: 1; min-width: 150px; }
+        .stat-card .label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-card .value { font-size: 1.5rem; font-weight: 700; color: #fbbf24; margin-top: 4px; }
+        table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; }
+        thead { background: #334155; }
+        th { padding: 12px 16px; text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; }
+        td { padding: 12px 16px; border-top: 1px solid #334155; }
+        tr:hover { background: #334155; }
+        a { color: #60a5fa; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .badge { padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
+        .badge-strong { background: #dc2626; color: white; }
+        .badge-moderate { background: #f59e0b; color: #1e293b; }
+        .badge-watch { background: #3b82f6; color: white; }
+        .badge-neutral { background: #475569; color: #e2e8f0; }
+        .positive { color: #22c55e; }
+        .negative { color: #ef4444; }
+        .na { color: #64748b; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>PSA 10 Pokemon Card Dashboard</h1>
+            <p>Tracking graded card premiums and momentum signals</p>
+        </header>
+
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="label">Cards Tracked</div>
+                <div class="value">{{ cards | length }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">With Ratio Data</div>
+                <div class="value">{{ cards | selectattr('ratio') | list | length }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">With Sentiment</div>
+                <div class="value">{{ cards | selectattr('sentiment') | list | length }}</div>
+            </div>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Card</th>
+                    <th>Set</th>
+                    <th>PSA 10 Price</th>
+                    <th>Raw Price</th>
+                    <th>Ratio</th>
+                    <th>7d Change</th>
+                    <th>30d Change</th>
+                    <th>Sentiment</th>
+                    <th>Mentions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for card in cards %}
+                <tr>
+                    <td><a href="/card/{{ card.id }}">{{ card.name }}</a></td>
+                    <td>{{ card.set_name }} #{{ card.card_number }}</td>
+                    <td>
+                        {% if card.ratio.psa10_price %}
+                            ${{ "%.2f" | format(card.ratio.psa10_price) }}
+                        {% else %}
+                            <span class="na">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if card.ratio.raw_price %}
+                            ${{ "%.2f" | format(card.ratio.raw_price) }}
+                        {% else %}
+                            <span class="na">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if card.ratio.ratio %}
+                            <strong>{{ "%.1f" | format(card.ratio.ratio) }}x</strong>
+                        {% else %}
+                            <span class="na">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if card.ratio.ratio_7d_change is not none and card.ratio.ratio_7d_change %}
+                            <span class="{{ 'positive' if card.ratio.ratio_7d_change > 0 else 'negative' }}">
+                                {{ "%+.2f" | format(card.ratio.ratio_7d_change) }}
+                            </span>
+                        {% else %}
+                            <span class="na">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if card.ratio.ratio_30d_change is not none and card.ratio.ratio_30d_change %}
+                            <span class="{{ 'positive' if card.ratio.ratio_30d_change > 0 else 'negative' }}">
+                                {{ "%+.2f" | format(card.ratio.ratio_30d_change) }}
+                            </span>
+                        {% else %}
+                            <span class="na">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if card.sentiment.weighted_sentiment is defined and card.sentiment.weighted_sentiment is not none %}
+                            <span class="{{ 'positive' if card.sentiment.weighted_sentiment > 0 else 'negative' }}">
+                                {{ "%.2f" | format(card.sentiment.weighted_sentiment) }}
+                            </span>
+                        {% else %}
+                            <span class="na">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if card.sentiment.mention_count is defined and card.sentiment.mention_count %}
+                            {{ card.sentiment.mention_count }}
+                        {% else %}
+                            <span class="na">0</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
