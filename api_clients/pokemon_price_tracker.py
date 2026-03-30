@@ -49,14 +49,20 @@ def _make_request(endpoint: str, params: Optional[dict] = None) -> Optional[dict
     _rate_limit()
 
     url = f"{BASE_URL}{endpoint}"
+    ssl_verify = True
     try:
-        response = httpx.get(url, headers=_get_headers(), params=params, timeout=30)
+        try:
+            response = httpx.get(url, headers=_get_headers(), params=params, timeout=30)
+        except httpx.ConnectError:
+            logger.warning("SSL error, retrying without verification...")
+            ssl_verify = False
+            response = httpx.get(url, headers=_get_headers(), params=params, timeout=30, verify=False)
 
         if response.status_code == 429:
             for backoff in [60, 120, 240]:
                 logger.warning("Rate limited (429). Backing off %ds...", backoff)
                 time.sleep(backoff)
-                response = httpx.get(url, headers=_get_headers(), params=params, timeout=30)
+                response = httpx.get(url, headers=_get_headers(), params=params, timeout=30, verify=ssl_verify)
                 if response.status_code != 429:
                     break
             if response.status_code == 429:

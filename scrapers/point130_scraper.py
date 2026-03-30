@@ -91,13 +91,24 @@ def scrape_card_sales(card_name: str, set_name: str, card_number: str,
     logger.info("Scraping 130point: %s?query=%s", url, search_query)
 
     try:
-        response = httpx.get(
-            url,
-            params=params,
-            headers={"User-Agent": USER_AGENT},
-            timeout=30,
-            follow_redirects=True,
-        )
+        try:
+            response = httpx.get(
+                url,
+                params=params,
+                headers={"User-Agent": USER_AGENT},
+                timeout=30,
+                follow_redirects=True,
+            )
+        except httpx.ConnectError:
+            logger.warning("SSL error for 130point, retrying without verification...")
+            response = httpx.get(
+                url,
+                params=params,
+                headers={"User-Agent": USER_AGENT},
+                timeout=30,
+                follow_redirects=True,
+                verify=False,
+            )
         response.raise_for_status()
         _request_count += 1
 
