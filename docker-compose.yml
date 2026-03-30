@@ -1,0 +1,42 @@
+services:
+  dashboard:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - db-data:/app/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:///./data/dashboard.db
+    restart: unless-stopped
+
+  # Run the daily job manually or on a schedule:
+  #   docker compose run --rm daily-job
+  #   docker compose run --rm daily-job python jobs/daily_job.py --backfill 7
+  daily-job:
+    build: .
+    volumes:
+      - db-data:/app/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:///./data/dashboard.db
+    command: python jobs/daily_job.py --backfill 7
+    profiles:
+      - jobs
+
+  # Seed the database:
+  #   docker compose run --rm seed
+  seed:
+    build: .
+    volumes:
+      - db-data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///./data/dashboard.db
+    command: python jobs/seed_cards.py
+    profiles:
+      - jobs
+
+volumes:
+  db-data:
