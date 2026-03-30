@@ -28,11 +28,13 @@ def _get_headers() -> dict:
 
 
 def _rate_limit():
-    """Enforce at least 30 seconds between requests (2 req/min budget)."""
+    """Enforce at least 60 seconds between requests (1 req/min to stay safe)."""
     global _last_request_time
     elapsed = time.time() - _last_request_time
-    if elapsed < 30.0:
-        time.sleep(30.0 - elapsed)
+    if elapsed < 60.0:
+        wait = 60.0 - elapsed
+        logger.info("Rate limit: waiting %.0fs before next API call...", wait)
+        time.sleep(wait)
     _last_request_time = time.time()
 
 
@@ -51,11 +53,14 @@ def _make_request(endpoint: str, params: Optional[dict] = None) -> Optional[dict
         response = httpx.get(url, headers=_get_headers(), params=params, timeout=30)
 
         if response.status_code == 429:
-            logger.warning("Rate limited (429). Backing off 60s.")
-            time.sleep(60)
-            response = httpx.get(url, headers=_get_headers(), params=params, timeout=30)
+            for backoff in [60, 120, 240]:
+                logger.warning("Rate limited (429). Backing off %ds...", backoff)
+                time.sleep(backoff)
+                response = httpx.get(url, headers=_get_headers(), params=params, timeout=30)
+                if response.status_code != 429:
+                    break
             if response.status_code == 429:
-                logger.error("Still rate limited after backoff. Giving up.")
+                logger.error("Still rate limited after exponential backoff. Giving up.")
                 return None
 
         if response.status_code == 401:
