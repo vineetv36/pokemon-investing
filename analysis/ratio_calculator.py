@@ -2,6 +2,7 @@
 
 import logging
 from datetime import date, timedelta
+from typing import Optional
 
 from db import get_connection
 from analysis.sentiment import get_sentiment_momentum
@@ -9,8 +10,8 @@ from analysis.sentiment import get_sentiment_momentum
 logger = logging.getLogger(__name__)
 
 
-def calculate_psa10_rolling_avg(card_id: int, target_date: date | None = None,
-                                 window_days: int = 30) -> dict | None:
+def calculate_psa10_rolling_avg(card_id: int, target_date: Optional[date] = None,
+                                 window_days: int = 30) -> Optional[dict]:
     """Calculate rolling average PSA 10 price from recent sales."""
     if target_date is None:
         target_date = date.today()
@@ -54,7 +55,7 @@ def calculate_psa10_rolling_avg(card_id: int, target_date: date | None = None,
     return result
 
 
-def get_latest_raw_price(card_id: int) -> float | None:
+def get_latest_raw_price(card_id: int) -> Optional[float]:
     """Get the most recent raw NM price for a card."""
     conn = get_connection()
     cursor = conn.cursor()
@@ -67,7 +68,7 @@ def get_latest_raw_price(card_id: int) -> float | None:
     return row["price"] if row else None
 
 
-def calculate_ratio(card_id: int, target_date: date | None = None) -> dict | None:
+def calculate_ratio(card_id: int, target_date: Optional[date] = None) -> Optional[dict]:
     """Calculate PSA 10 / raw price ratio and changes over time."""
     if target_date is None:
         target_date = date.today()

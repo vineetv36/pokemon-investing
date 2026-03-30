@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from datetime import date
+from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -35,7 +36,7 @@ def _rate_limit():
     _last_request_time = time.time()
 
 
-def _make_request(endpoint: str, params: dict | None = None) -> dict | None:
+def _make_request(endpoint: str, params: Optional[dict] = None) -> Optional[dict]:
     """Make an authenticated GET request with rate limiting and error handling."""
     global _credits_used
 
@@ -73,7 +74,7 @@ def _make_request(endpoint: str, params: dict | None = None) -> dict | None:
         return None
 
 
-def search_card(name: str, set_id: str | None = None) -> dict | None:
+def search_card(name: str, set_id: Optional[str] = None) -> Optional[dict]:
     """Search for a card by name and optionally set ID."""
     params = {"search": name}
     if set_id:
@@ -81,17 +82,17 @@ def search_card(name: str, set_id: str | None = None) -> dict | None:
     return _make_request("/cards", params)
 
 
-def get_card_by_tcgplayer_id(tcgplayer_id: str) -> dict | None:
+def get_card_by_tcgplayer_id(tcgplayer_id: str) -> Optional[dict]:
     """Fetch card data by TCGPlayer ID."""
     return _make_request("/cards", {"tcgPlayerId": tcgplayer_id})
 
 
-def get_sets() -> dict | None:
+def get_sets() -> Optional[dict]:
     """Fetch all available sets."""
     return _make_request("/sets")
 
 
-def fetch_and_store_raw_price(card_id: int, card_name: str, set_name: str) -> float | None:
+def fetch_and_store_raw_price(card_id: int, card_name: str, set_name: str) -> Optional[float]:
     """Fetch current raw NM price for a card and store it."""
     data = search_card(card_name, set_name)
     if not data:

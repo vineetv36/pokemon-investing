@@ -3,6 +3,7 @@
 import logging
 import re
 from datetime import date, timedelta
+from typing import Optional
 
 from db import get_connection
 
@@ -87,7 +88,7 @@ def analyze_posts(posts: list[dict]) -> list[dict]:
     return posts
 
 
-def compute_daily_sentiment(card_id: int, target_date: date | None = None):
+def compute_daily_sentiment(card_id: int, target_date: Optional[date] = None):
     """Compute weighted daily sentiment for a card and store it."""
     if target_date is None:
         target_date = date.today()
