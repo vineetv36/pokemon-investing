@@ -3,11 +3,17 @@
 import logging
 import random
 import re
+import ssl
 import time
 from datetime import date, datetime, timedelta
 from typing import List
 
 import httpx
+
+# Create SSL context that doesn't verify certificates
+_ssl_ctx = ssl.create_default_context()
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode = ssl.CERT_NONE
 from bs4 import BeautifulSoup
 
 from db import get_connection
@@ -97,7 +103,7 @@ def scrape_card_sales(card_name: str, set_name: str, card_number: str,
             headers={"User-Agent": USER_AGENT},
             timeout=30,
             follow_redirects=True,
-            verify=False,
+            verify=_ssl_ctx,
         )
         response.raise_for_status()
         _request_count += 1

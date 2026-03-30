@@ -22,6 +22,10 @@ RUN mkdir -p /app/data
 # Set environment defaults
 ENV DATABASE_URL=sqlite:///./data/dashboard.db
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONHTTPSVERIFY=0
+ENV CURL_CA_BUNDLE=""
+ENV REQUESTS_CA_BUNDLE=""
+ENV SSL_CERT_FILE=""
 
 EXPOSE 8000
 

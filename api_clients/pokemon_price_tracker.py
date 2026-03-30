@@ -2,11 +2,17 @@
 
 import logging
 import os
+import ssl
 import time
 from datetime import date
 from typing import Optional
 
 import httpx
+
+# Create SSL context that doesn't verify certificates
+_ssl_ctx = ssl.create_default_context()
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode = ssl.CERT_NONE
 from dotenv import load_dotenv
 
 from db import get_connection
@@ -50,13 +56,13 @@ def _make_request(endpoint: str, params: Optional[dict] = None) -> Optional[dict
 
     url = f"{BASE_URL}{endpoint}"
     try:
-        response = httpx.get(url, headers=_get_headers(), params=params, timeout=30, verify=False)
+        response = httpx.get(url, headers=_get_headers(), params=params, timeout=30, verify=_ssl_ctx)
 
         if response.status_code == 429:
             for backoff in [60, 120, 240]:
                 logger.warning("Rate limited (429). Backing off %ds...", backoff)
                 time.sleep(backoff)
-                response = httpx.get(url, headers=_get_headers(), params=params, timeout=30, verify=False)
+                response = httpx.get(url, headers=_get_headers(), params=params, timeout=30, verify=_ssl_ctx)
                 if response.status_code != 429:
                     break
             if response.status_code == 429:

@@ -1,8 +1,12 @@
 .PHONY: build seed run job stop logs clean test
 
-# Build the Docker image
+# Build the Docker image (use make rebuild to force no-cache)
 build:
 	docker compose build
+
+# Force rebuild without cache
+rebuild:
+	docker compose build --no-cache
 
 # Seed the database with starter cards
 seed: build
