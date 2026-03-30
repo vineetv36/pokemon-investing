@@ -171,14 +171,14 @@ def home(request: Request):
         card["sentiment"] = dict(sent) if sent else {}
 
     conn.close()
-    return templates.TemplateResponse("index.html", {"request": request, "cards": cards})
+    return templates.TemplateResponse(request, "index.html", {"cards": cards})
 
 
 @app.get("/card/{card_id}", response_class=HTMLResponse)
 def card_detail_page(request: Request, card_id: int):
     """Card detail page."""
     data = api_card_detail(card_id)
-    return templates.TemplateResponse("card_detail.html", {"request": request, "card": data})
+    return templates.TemplateResponse(request, "card_detail.html", {"card": data})
 
 
 if __name__ == "__main__":
