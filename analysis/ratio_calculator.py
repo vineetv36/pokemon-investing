@@ -89,7 +89,7 @@ def calculate_ratio(card_id: int, target_date: date | None = None) -> dict | Non
         (card_id, (target_date - timedelta(days=7)).isoformat()),
     )
     row_7d = cursor.fetchone()
-    ratio_7d_change = round(ratio - row_7d["ratio"], 2) if row_7d else None
+    ratio_7d_change = round(ratio - row_7d["ratio"], 2) if row_7d and row_7d["ratio"] is not None else None
 
     # Get ratio from 30 days ago
     cursor.execute(
@@ -97,7 +97,7 @@ def calculate_ratio(card_id: int, target_date: date | None = None) -> dict | Non
         (card_id, (target_date - timedelta(days=30)).isoformat()),
     )
     row_30d = cursor.fetchone()
-    ratio_30d_change = round(ratio - row_30d["ratio"], 2) if row_30d else None
+    ratio_30d_change = round(ratio - row_30d["ratio"], 2) if row_30d and row_30d["ratio"] is not None else None
 
     # Store ratio
     cursor.execute(
