@@ -101,7 +101,7 @@ async def run_daily_job(days_back: int = 7):
             fetch_and_store_raw_price(card["id"], card["name"], card["set_name"])
         except Exception as e:
             logger.error("Error fetching price for %s: %s", card["name"], e)
-        time.sleep(1)  # Rate limit
+        # Rate limiting handled by the API client (30s between requests)
 
     # Step 3: Scrape Reddit
     logger.info("--- Step 3: Scraping Reddit ---")

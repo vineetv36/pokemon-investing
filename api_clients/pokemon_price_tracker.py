@@ -28,11 +28,11 @@ def _get_headers() -> dict:
 
 
 def _rate_limit():
-    """Enforce at least 1 second between requests (2 req/min budget)."""
+    """Enforce at least 30 seconds between requests (2 req/min budget)."""
     global _last_request_time
     elapsed = time.time() - _last_request_time
-    if elapsed < 1.0:
-        time.sleep(1.0 - elapsed)
+    if elapsed < 30.0:
+        time.sleep(30.0 - elapsed)
     _last_request_time = time.time()
 
 
