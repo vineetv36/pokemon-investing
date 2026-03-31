@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 MAX_REQUESTS_PER_SESSION = 100
 _request_count = 0
 
-USER_AGENT = "psa10-dashboard/1.0 (personal research project)"
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+)
 
 
 def _should_skip_listing(title: str) -> bool:
@@ -52,33 +55,89 @@ def _filter_outliers_iqr(prices: list) -> list:
     return [p for p in prices if lower <= p <= upper]
 
 
+async def _wait_for_cloudflare(page, timeout=30000):
+    """Wait for Cloudflare challenge to resolve."""
+    start = asyncio.get_event_loop().time()
+    while (asyncio.get_event_loop().time() - start) * 1000 < timeout:
+        content = await page.content()
+        # Check if Cloudflare challenge is gone
+        if "Performing security verification" not in content and "challenge-platform" not in content:
+            return True
+        await page.wait_for_timeout(1000)
+    return False
+
+
 async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, set_name, card_number):
-    """Use Playwright to render 130point.com and extract sales data."""
+    """Use Playwright with stealth to render 130point.com and extract sales data."""
     from playwright.async_api import async_playwright
+    from playwright_stealth import stealth_async
 
     results = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page(user_agent=USER_AGENT)
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+            ],
+        )
+        context = await browser.new_context(
+            user_agent=USER_AGENT,
+            viewport={"width": 1920, "height": 1080},
+            locale="en-US",
+        )
+        page = await context.new_page()
+        await stealth_async(page)
 
         url = f"https://130point.com/sales/?query={search_query.replace(' ', '+')}"
-        logger.info("Scraping 130point (Playwright): %s", url)
+        logger.info("Scraping 130point (stealth): %s", url)
 
         try:
-            await page.goto(url, timeout=30000)
-            # Wait for JS to render the table
+            await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+
+            # Wait for Cloudflare to pass
+            cf_passed = await _wait_for_cloudflare(page, timeout=15000)
+            if not cf_passed:
+                logger.warning("Cloudflare challenge did not resolve for %s", card_name)
+                await browser.close()
+                return results
+
+            # Wait for content to load after Cloudflare
             await page.wait_for_timeout(5000)
 
-            # Get all table rows
+            # Try to find sales data - check multiple possible selectors
+            # First dump what we see for debugging
+            body_text = await page.inner_text("body")
+            if "No results" in body_text or len(body_text.strip()) < 100:
+                logger.info("No results found on 130point for %s", card_name)
+                await browser.close()
+                return results
+
+            # Look for table rows
             rows = await page.query_selector_all("table tbody tr")
             if not rows:
-                # Try without tbody
                 rows = await page.query_selector_all("table tr")
+            if not rows:
+                # Try div-based layout
+                rows = await page.query_selector_all(".sale-row, .sold-item, .result-row, [class*='sale'], [class*='sold']")
+
+            if not rows:
+                # Log page content for debugging
+                logger.warning(
+                    "No parseable rows found for %s. Page text: %.500s",
+                    card_name, body_text,
+                )
+                await browser.close()
+                return results
+
+            logger.info("Found %d rows for %s", len(rows), card_name)
 
             for row in rows:
                 cells = await row.query_selector_all("td")
                 if len(cells) < 3:
+                    # Try getting all text and parsing it
+                    text = await row.inner_text()
                     continue
 
                 title = (await cells[0].inner_text()).strip()
@@ -122,7 +181,7 @@ async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, s
                 })
 
         except Exception as e:
-            logger.error("Playwright error scraping 130point for %s: %s", card_name, e)
+            logger.error("Error scraping 130point for %s: %s", card_name, e)
         finally:
             await browser.close()
 
@@ -131,7 +190,7 @@ async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, s
 
 def scrape_card_sales(card_name, set_name, card_number,
                       grade="PSA 10", days_back=7):
-    """Scrape 130point.com for recent sold listings using Playwright."""
+    """Scrape 130point.com for recent sold listings using Playwright stealth."""
     global _request_count
 
     if _request_count >= MAX_REQUESTS_PER_SESSION:
