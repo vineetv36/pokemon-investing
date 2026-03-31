@@ -91,16 +91,17 @@ def run_daily_job(days_back=7):
             logger.error("Error scraping 130point for %s: %s", card["name"], e)
 
     # Step 2: Fetch raw prices from PokemonPriceTracker
-    logger.info("--- Step 2: Fetching prices from PokemonPriceTracker ---")
-    for card in cards:
-        if get_credits_remaining() <= 10:
-            logger.warning("Low on API credits. Stopping price fetches.")
-            break
-        try:
-            fetch_and_store_raw_price(card["id"], card["name"], card["set_name"])
-        except Exception as e:
-            logger.error("Error fetching price for %s: %s", card["name"], e)
-        # Rate limiting handled by the API client (30s between requests)
+    # TODO: Uncomment when API rate limiting is resolved
+    # logger.info("--- Step 2: Fetching prices from PokemonPriceTracker ---")
+    # for card in cards:
+    #     if get_credits_remaining() <= 10:
+    #         logger.warning("Low on API credits. Stopping price fetches.")
+    #         break
+    #     try:
+    #         fetch_and_store_raw_price(card["id"], card["name"], card["set_name"])
+    #     except Exception as e:
+    #         logger.error("Error fetching price for %s: %s", card["name"], e)
+    logger.info("--- Step 2: Skipping PokemonPriceTracker (disabled) ---")
 
     # Step 3: Scrape Reddit
     logger.info("--- Step 3: Scraping Reddit ---")
