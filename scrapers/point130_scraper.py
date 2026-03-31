@@ -1,20 +1,11 @@
 """Scraper for 130point.com — reveals true eBay sold prices including Best Offer."""
 
+import asyncio
 import logging
 import random
 import re
-import ssl
 import time
 from datetime import date, datetime, timedelta
-from typing import List
-
-import httpx
-
-# Create SSL context that doesn't verify certificates
-_ssl_ctx = ssl.create_default_context()
-_ssl_ctx.check_hostname = False
-_ssl_ctx.verify_mode = ssl.CERT_NONE
-from bs4 import BeautifulSoup
 
 from db import get_connection
 
@@ -29,10 +20,8 @@ USER_AGENT = "psa10-dashboard/1.0 (personal research project)"
 def _should_skip_listing(title: str) -> bool:
     """Skip lot sales, damaged cards, and non-PSA graded listings."""
     title_lower = title.lower()
-    # Skip lot/bundle sales
     if any(word in title_lower for word in ["lot", "bundle", "collection of"]):
         return True
-    # Skip BGS/CGC listings that appear in PSA searches
     if any(word in title_lower for word in ["bgs", "cgc"]) and "psa" not in title_lower:
         return True
     return False
@@ -63,84 +52,53 @@ def _filter_outliers_iqr(prices: list) -> list:
     return [p for p in prices if lower <= p <= upper]
 
 
-def scrape_card_sales(card_name: str, set_name: str, card_number: str,
-                      grade: str = "PSA 10", days_back: int = 7) -> list:
-    """
-    Scrape 130point.com for recent sold listings of a card using httpx + BeautifulSoup.
-
-    Args:
-        card_name: Card name (e.g. "Charizard")
-        set_name: Set name (e.g. "Base Set")
-        card_number: Card number (e.g. "4/102")
-        grade: "PSA 10" for graded or "RAW" for ungraded
-        days_back: How many days back to search
-
-    Returns:
-        List of sale dicts with price, date, title, etc.
-    """
-    global _request_count
-
-    if _request_count >= MAX_REQUESTS_PER_SESSION:
-        logger.warning("Max requests per session reached (%d). Stopping.", MAX_REQUESTS_PER_SESSION)
-        return []
-
-    search_query = f"{card_name} {set_name} {card_number}"
-    if grade == "PSA 10":
-        search_query += " PSA 10"
+async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, set_name, card_number):
+    """Use Playwright to render 130point.com and extract sales data."""
+    from playwright.async_api import async_playwright
 
     results = []
-    cutoff_date = date.today() - timedelta(days=days_back)
 
-    url = f"https://130point.com/sales/"
-    params = {"query": search_query}
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page(user_agent=USER_AGENT)
 
-    logger.info("Scraping 130point: %s?query=%s", url, search_query)
+        url = f"https://130point.com/sales/?query={search_query.replace(' ', '+')}"
+        logger.info("Scraping 130point (Playwright): %s", url)
 
-    try:
-        response = httpx.get(
-            url,
-            params=params,
-            headers={"User-Agent": USER_AGENT},
-            timeout=30,
-            follow_redirects=True,
-            verify=_ssl_ctx,
-        )
-        response.raise_for_status()
-        _request_count += 1
+        try:
+            await page.goto(url, timeout=30000)
+            # Wait for JS to render the table
+            await page.wait_for_timeout(5000)
 
-        soup = BeautifulSoup(response.text, "html.parser")
+            # Get all table rows
+            rows = await page.query_selector_all("table tbody tr")
+            if not rows:
+                # Try without tbody
+                rows = await page.query_selector_all("table tr")
 
-        # Find all tables and look for sales data rows
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
             for row in rows:
-                cells = row.find_all("td")
+                cells = await row.query_selector_all("td")
                 if len(cells) < 3:
                     continue
 
-                title = cells[0].get_text(strip=True)
-                price_text = cells[1].get_text(strip=True)
-                date_text = cells[2].get_text(strip=True)
+                title = (await cells[0].inner_text()).strip()
+                price_text = (await cells[1].inner_text()).strip()
+                date_text = (await cells[2].inner_text()).strip()
 
                 if not title or not price_text:
                     continue
-
                 if _should_skip_listing(title):
                     continue
-
-                # Determine if this matches our requested grade
                 if grade == "PSA 10" and not _is_psa10_listing(title):
                     continue
                 if grade == "RAW" and not _is_raw_listing(title):
                     continue
 
-                # Parse price
                 price_match = re.search(r"\$?([\d,]+\.?\d*)", price_text)
                 if not price_match:
                     continue
                 sale_price = float(price_match.group(1).replace(",", ""))
 
-                # Parse date (try multiple formats)
                 sale_date = None
                 for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d, %Y"):
                     try:
@@ -163,20 +121,40 @@ def scrape_card_sales(card_name: str, set_name: str, card_number: str,
                     "source": "130point",
                 })
 
-    except httpx.HTTPStatusError as e:
-        logger.error("HTTP error scraping 130point for %s: %s", card_name, e)
-    except httpx.RequestError as e:
-        logger.error("Request error scraping 130point for %s: %s", card_name, e)
-    except Exception as e:
-        logger.error("Error scraping 130point for %s: %s", card_name, e)
+        except Exception as e:
+            logger.error("Playwright error scraping 130point for %s: %s", card_name, e)
+        finally:
+            await browser.close()
 
-    # Delay between requests
+    return results
+
+
+def scrape_card_sales(card_name, set_name, card_number,
+                      grade="PSA 10", days_back=7):
+    """Scrape 130point.com for recent sold listings using Playwright."""
+    global _request_count
+
+    if _request_count >= MAX_REQUESTS_PER_SESSION:
+        logger.warning("Max requests per session reached (%d). Stopping.", MAX_REQUESTS_PER_SESSION)
+        return []
+
+    search_query = f"{card_name} {set_name} {card_number}"
+    if grade == "PSA 10":
+        search_query += " PSA 10"
+
+    cutoff_date = date.today() - timedelta(days=days_back)
+
+    results = asyncio.run(
+        _scrape_with_playwright(search_query, grade, cutoff_date, card_name, set_name, card_number)
+    )
+
+    _request_count += 1
     time.sleep(random.uniform(3, 6))
 
     return results
 
 
-def store_psa10_sales(card_id: int, sales: list):
+def store_psa10_sales(card_id, sales):
     """Store PSA 10 sales in the database."""
     conn = get_connection()
     cursor = conn.cursor()
@@ -198,7 +176,7 @@ def store_psa10_sales(card_id: int, sales: list):
     return inserted
 
 
-def get_cached_sales(card_id: int, since_date: date) -> bool:
+def get_cached_sales(card_id, since_date):
     """Check if we already have recent sales cached."""
     conn = get_connection()
     cursor = conn.cursor()
