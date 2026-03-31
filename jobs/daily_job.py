@@ -83,12 +83,14 @@ def run_daily_job(days_back=7):
     logger.info("Processing %d active cards...", len(cards))
 
     # Step 1: Scrape 130point for each card
-    logger.info("--- Step 1: Scraping 130point.com ---")
-    for card in cards:
-        try:
-            scrape_130point_for_card(card, days_back)
-        except Exception as e:
-            logger.error("Error scraping 130point for %s: %s", card["name"], e)
+    # TODO: Uncomment when 130point stops returning 403 (needs browser/Playwright)
+    # logger.info("--- Step 1: Scraping 130point.com ---")
+    # for card in cards:
+    #     try:
+    #         scrape_130point_for_card(card, days_back)
+    #     except Exception as e:
+    #         logger.error("Error scraping 130point for %s: %s", card["name"], e)
+    logger.info("--- Step 1: Skipping 130point (403 blocked, needs Playwright) ---")
 
     # Step 2: Fetch raw prices from PokemonPriceTracker
     # TODO: Uncomment when API rate limiting is resolved
