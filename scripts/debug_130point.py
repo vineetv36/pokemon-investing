@@ -2,7 +2,7 @@
 
 import asyncio
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth
+from playwright_stealth import Stealth
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -22,7 +22,8 @@ async def check():
             locale="en-US",
         )
         page = await context.new_page()
-        await stealth(page)
+        s = Stealth()
+        await s.apply_stealth_async(page)
 
         url = "https://130point.com/sales/?query=Charizard+Base+Set+PSA+10"
         print(f"Navigating to: {url}")

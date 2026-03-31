@@ -70,9 +70,10 @@ async def _wait_for_cloudflare(page, timeout=30000):
 async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, set_name, card_number):
     """Use Playwright with stealth to render 130point.com and extract sales data."""
     from playwright.async_api import async_playwright
-    from playwright_stealth import stealth
+    from playwright_stealth import Stealth
 
     results = []
+    s = Stealth()
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -88,7 +89,7 @@ async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, s
             locale="en-US",
         )
         page = await context.new_page()
-        await stealth(page)
+        await s.apply_stealth_async(page)
 
         url = f"https://130point.com/sales/?query={search_query.replace(' ', '+')}"
         logger.info("Scraping 130point (stealth): %s", url)
