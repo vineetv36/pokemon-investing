@@ -147,14 +147,35 @@ def run_daily_job(days_back=7):
     logger.info("=== Daily job complete in %.1f seconds ===", elapsed)
 
 
+def backfill_aggregates(days=60):
+    """Recompute psa10_prices, price_ratios, daily_sentiment from raw data.
+
+    Run this after scraping historical sales to build the aggregate tables
+    that the dashboard charts read from.
+    """
+    logger.info("=== Backfilling aggregates for %d days ===", days)
+    init_db()
+    from jobs.seed_sample_data import compute_all_aggregates
+    compute_all_aggregates(days)
+    logger.info("=== Backfill complete ===")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run the daily PSA 10 dashboard job")
     parser.add_argument(
         "--backfill", type=int, default=7,
-        help="Number of days to look back (default: 7)",
+        help="Number of days to look back for scraping (default: 7)",
+    )
+    parser.add_argument(
+        "--aggregate", type=int, default=0,
+        help="Recompute aggregates for N days from raw sales data (no scraping)",
     )
     args = parser.parse_args()
-    run_daily_job(days_back=args.backfill)
+
+    if args.aggregate > 0:
+        backfill_aggregates(args.aggregate)
+    else:
+        run_daily_job(days_back=args.backfill)
 
 
 if __name__ == "__main__":
