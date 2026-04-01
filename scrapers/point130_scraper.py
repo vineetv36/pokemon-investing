@@ -91,26 +91,55 @@ async def _scrape_ebay(search_query, grade, cutoff_date, card_name, set_name, ca
 
         try:
             await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
+            # Wait longer for JS to render all items
+            await page.wait_for_timeout(5000)
 
-            # eBay sold listings use .s-item class
-            items = await page.query_selector_all(".s-item")
+            # Try multiple selectors - eBay changes class names
+            items = await page.query_selector_all("ul.srp-results > li")
+            if not items:
+                items = await page.query_selector_all(".s-item")
+            if not items:
+                items = await page.query_selector_all("[class*='s-item']")
+            if not items:
+                # Last resort: get all list items inside results container
+                container = await page.query_selector("#srp-river-results")
+                if container:
+                    items = await container.query_selector_all("li")
 
             if not items:
                 logger.info("No eBay results for %s", card_name)
                 await browser.close()
                 return results
 
-            logger.info("Found %d eBay listings for %s", len(items), card_name)
+            logger.info("Found %d eBay listing elements for %s", len(items), card_name)
 
             for item in items:
-                # Get title
-                title_el = await item.query_selector(".s-item__title")
-                if not title_el:
+                # Get all text from the item
+                item_text = (await item.inner_text()).strip()
+                if not item_text or len(item_text) < 20:
                     continue
-                title = (await title_el.inner_text()).strip()
 
-                if title.lower() == "shop on ebay":
+                # Skip non-listing items
+                item_lower = item_text.lower()
+                if "shop on ebay" in item_lower or "results for" in item_lower:
+                    continue
+
+                # Try to get title from specific selector first
+                title = ""
+                for sel in [".s-item__title", "[class*='item__title']", "h3", "a span[role='heading']"]:
+                    title_el = await item.query_selector(sel)
+                    if title_el:
+                        title = (await title_el.inner_text()).strip()
+                        break
+                if not title:
+                    # Extract title from first line of text
+                    lines = [l.strip() for l in item_text.split("\n") if l.strip()]
+                    # Skip date line like "Sold Mar 30, 2026"
+                    for line in lines:
+                        if not line.startswith("Sold") and len(line) > 15:
+                            title = line
+                            break
+                if not title:
                     continue
                 if _should_skip_listing(title):
                     continue
@@ -119,11 +148,19 @@ async def _scrape_ebay(search_query, grade, cutoff_date, card_name, set_name, ca
                 if grade == "RAW" and not _is_raw_listing(title):
                     continue
 
-                # Get price
-                price_el = await item.query_selector(".s-item__price")
-                if not price_el:
-                    continue
-                price_text = (await price_el.inner_text()).strip()
+                # Get price from selector or text
+                price_text = ""
+                for sel in [".s-item__price", "[class*='item__price']", ".s-item__detail--price"]:
+                    price_el = await item.query_selector(sel)
+                    if price_el:
+                        price_text = (await price_el.inner_text()).strip()
+                        break
+                if not price_text:
+                    # Find price in full text
+                    price_match_text = re.search(r"\$([\d,]+\.?\d*)", item_text)
+                    if price_match_text:
+                        price_text = price_match_text.group(0)
+
                 price_match = re.search(r"\$?([\d,]+\.?\d*)", price_text)
                 if not price_match:
                     continue
@@ -133,21 +170,37 @@ async def _scrape_ebay(search_query, grade, cutoff_date, card_name, set_name, ca
                 if sale_price < 1.0 or sale_price > 500000:
                     continue
 
-                # Get date
-                date_el = await item.query_selector(".s-item__title--tagblock .POSITIVE, .s-item__ended-date, .s-item__endedDate")
+                # Get date from text — look for "Sold Mon DD, YYYY" pattern
                 sale_date = None
-                if date_el:
-                    date_text = (await date_el.inner_text()).strip()
-                    # eBay formats: "Sold  Mar 28, 2026" or "Mar 28, 2026"
-                    date_text = re.sub(r"^Sold\s+", "", date_text)
-                    for fmt in ("%b %d, %Y", "%b %d %Y", "%m/%d/%Y", "%d %b %Y"):
+                sold_match = re.search(
+                    r"Sold\s+(\w{3}\s+\d{1,2},?\s+\d{4})", item_text
+                )
+                if sold_match:
+                    date_str = sold_match.group(1).replace(",", "")
+                    for fmt in ("%b %d %Y", "%b %d, %Y"):
                         try:
-                            sale_date = datetime.strptime(date_text.strip(), fmt).date()
+                            sale_date = datetime.strptime(date_str.strip(), fmt).date()
                             break
                         except ValueError:
                             continue
 
-                # Default to today if no date found (eBay recently sold)
+                if sale_date is None:
+                    # Try selector-based date
+                    for sel in [".s-item__title--tagblock .POSITIVE", "[class*='ended-date']", ".s-item__endedDate"]:
+                        date_el = await item.query_selector(sel)
+                        if date_el:
+                            dt = (await date_el.inner_text()).strip()
+                            dt = re.sub(r"^Sold\s+", "", dt)
+                            for fmt in ("%b %d, %Y", "%b %d %Y", "%m/%d/%Y"):
+                                try:
+                                    sale_date = datetime.strptime(dt.strip(), fmt).date()
+                                    break
+                                except ValueError:
+                                    continue
+                            if sale_date:
+                                break
+
+                # Default to today if no date found
                 if sale_date is None:
                     sale_date = date.today()
 
