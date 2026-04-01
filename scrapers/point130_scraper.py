@@ -1,4 +1,4 @@
-"""Scraper for 130point.com — reveals true eBay sold prices including Best Offer."""
+"""Scraper for eBay sold/completed listings — PSA 10 and raw card prices."""
 
 import asyncio
 import logging
@@ -23,7 +23,7 @@ USER_AGENT = (
 def _should_skip_listing(title: str) -> bool:
     """Skip lot sales, damaged cards, and non-PSA graded listings."""
     title_lower = title.lower()
-    if any(word in title_lower for word in ["lot", "bundle", "collection of"]):
+    if any(word in title_lower for word in ["lot", "bundle", "collection of", "repack"]):
         return True
     if any(word in title_lower for word in ["bgs", "cgc"]) and "psa" not in title_lower:
         return True
@@ -39,7 +39,10 @@ def _is_psa10_listing(title: str) -> bool:
 def _is_raw_listing(title: str) -> bool:
     """Check if listing is a raw NM card."""
     title_lower = title.lower()
-    return any(term in title_lower for term in ["nm", "near mint", "raw"])
+    # If it mentions PSA/BGS/CGC with a grade, it's not raw
+    if re.search(r"(psa|bgs|cgc)\s*\d", title_lower):
+        return False
+    return True
 
 
 def _filter_outliers_iqr(prices: list) -> list:
@@ -55,33 +58,26 @@ def _filter_outliers_iqr(prices: list) -> list:
     return [p for p in prices if lower <= p <= upper]
 
 
-async def _wait_for_cloudflare(page, timeout=30000):
-    """Wait for Cloudflare challenge to resolve."""
-    start = asyncio.get_event_loop().time()
-    while (asyncio.get_event_loop().time() - start) * 1000 < timeout:
-        content = await page.content()
-        # Check if Cloudflare challenge is gone
-        if "Performing security verification" not in content and "challenge-platform" not in content:
-            return True
-        await page.wait_for_timeout(1000)
-    return False
+def _build_ebay_url(search_query: str) -> str:
+    """Build eBay sold listings search URL."""
+    # LH_Sold=1 & LH_Complete=1 filters to sold/completed items
+    query = search_query.replace(" ", "+")
+    return (
+        f"https://www.ebay.com/sch/i.html?_nkw={query}"
+        f"&LH_Sold=1&LH_Complete=1&_sop=13&rt=nc"
+    )
 
 
-async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, set_name, card_number):
-    """Use Playwright with stealth to render 130point.com and extract sales data."""
+async def _scrape_ebay(search_query, grade, cutoff_date, card_name, set_name, card_number):
+    """Use Playwright to scrape eBay sold listings."""
     from playwright.async_api import async_playwright
-    from playwright_stealth import Stealth
 
     results = []
-    s = Stealth()
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-            ],
+            args=["--no-sandbox"],
         )
         context = await browser.new_context(
             user_agent=USER_AGENT,
@@ -89,63 +85,32 @@ async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, s
             locale="en-US",
         )
         page = await context.new_page()
-        await s.apply_stealth_async(page)
 
-        url = f"https://130point.com/sales/?query={search_query.replace(' ', '+')}"
-        logger.info("Scraping 130point (stealth): %s", url)
+        url = _build_ebay_url(search_query)
+        logger.info("Scraping eBay sold listings: %s", url)
 
         try:
             await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(3000)
 
-            # Wait for Cloudflare to pass
-            cf_passed = await _wait_for_cloudflare(page, timeout=15000)
-            if not cf_passed:
-                logger.warning("Cloudflare challenge did not resolve for %s", card_name)
+            # eBay sold listings use .s-item class
+            items = await page.query_selector_all(".s-item")
+
+            if not items:
+                logger.info("No eBay results for %s", card_name)
                 await browser.close()
                 return results
 
-            # Wait for content to load after Cloudflare
-            await page.wait_for_timeout(5000)
+            logger.info("Found %d eBay listings for %s", len(items), card_name)
 
-            # Try to find sales data - check multiple possible selectors
-            # First dump what we see for debugging
-            body_text = await page.inner_text("body")
-            if "No results" in body_text or len(body_text.strip()) < 100:
-                logger.info("No results found on 130point for %s", card_name)
-                await browser.close()
-                return results
-
-            # Look for table rows
-            rows = await page.query_selector_all("table tbody tr")
-            if not rows:
-                rows = await page.query_selector_all("table tr")
-            if not rows:
-                # Try div-based layout
-                rows = await page.query_selector_all(".sale-row, .sold-item, .result-row, [class*='sale'], [class*='sold']")
-
-            if not rows:
-                # Log page content for debugging
-                logger.warning(
-                    "No parseable rows found for %s. Page text: %.500s",
-                    card_name, body_text,
-                )
-                await browser.close()
-                return results
-
-            logger.info("Found %d rows for %s", len(rows), card_name)
-
-            for row in rows:
-                cells = await row.query_selector_all("td")
-                if len(cells) < 3:
-                    # Try getting all text and parsing it
-                    text = await row.inner_text()
+            for item in items:
+                # Get title
+                title_el = await item.query_selector(".s-item__title")
+                if not title_el:
                     continue
+                title = (await title_el.inner_text()).strip()
 
-                title = (await cells[0].inner_text()).strip()
-                price_text = (await cells[1].inner_text()).strip()
-                date_text = (await cells[2].inner_text()).strip()
-
-                if not title or not price_text:
+                if title.lower() == "shop on ebay":
                     continue
                 if _should_skip_listing(title):
                     continue
@@ -154,20 +119,39 @@ async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, s
                 if grade == "RAW" and not _is_raw_listing(title):
                     continue
 
+                # Get price
+                price_el = await item.query_selector(".s-item__price")
+                if not price_el:
+                    continue
+                price_text = (await price_el.inner_text()).strip()
                 price_match = re.search(r"\$?([\d,]+\.?\d*)", price_text)
                 if not price_match:
                     continue
                 sale_price = float(price_match.group(1).replace(",", ""))
 
-                sale_date = None
-                for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y", "%b %d, %Y"):
-                    try:
-                        sale_date = datetime.strptime(date_text.strip(), fmt).date()
-                        break
-                    except ValueError:
-                        continue
+                # Skip unreasonable prices
+                if sale_price < 1.0 or sale_price > 500000:
+                    continue
 
-                if sale_date is None or sale_date < cutoff_date:
+                # Get date
+                date_el = await item.query_selector(".s-item__title--tagblock .POSITIVE, .s-item__ended-date, .s-item__endedDate")
+                sale_date = None
+                if date_el:
+                    date_text = (await date_el.inner_text()).strip()
+                    # eBay formats: "Sold  Mar 28, 2026" or "Mar 28, 2026"
+                    date_text = re.sub(r"^Sold\s+", "", date_text)
+                    for fmt in ("%b %d, %Y", "%b %d %Y", "%m/%d/%Y", "%d %b %Y"):
+                        try:
+                            sale_date = datetime.strptime(date_text.strip(), fmt).date()
+                            break
+                        except ValueError:
+                            continue
+
+                # Default to today if no date found (eBay recently sold)
+                if sale_date is None:
+                    sale_date = date.today()
+
+                if sale_date < cutoff_date:
                     continue
 
                 results.append({
@@ -178,11 +162,11 @@ async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, s
                     "sale_price": sale_price,
                     "sale_date": sale_date,
                     "listing_title": title,
-                    "source": "130point",
+                    "source": "ebay",
                 })
 
         except Exception as e:
-            logger.error("Error scraping 130point for %s: %s", card_name, e)
+            logger.error("Error scraping eBay for %s: %s", card_name, e)
         finally:
             await browser.close()
 
@@ -191,7 +175,7 @@ async def _scrape_with_playwright(search_query, grade, cutoff_date, card_name, s
 
 def scrape_card_sales(card_name, set_name, card_number,
                       grade="PSA 10", days_back=7):
-    """Scrape 130point.com for recent sold listings using Playwright stealth."""
+    """Scrape eBay sold listings for a card."""
     global _request_count
 
     if _request_count >= MAX_REQUESTS_PER_SESSION:
@@ -205,11 +189,11 @@ def scrape_card_sales(card_name, set_name, card_number,
     cutoff_date = date.today() - timedelta(days=days_back)
 
     results = asyncio.run(
-        _scrape_with_playwright(search_query, grade, cutoff_date, card_name, set_name, card_number)
+        _scrape_ebay(search_query, grade, cutoff_date, card_name, set_name, card_number)
     )
 
     _request_count += 1
-    time.sleep(random.uniform(3, 6))
+    time.sleep(random.uniform(2, 5))
 
     return results
 

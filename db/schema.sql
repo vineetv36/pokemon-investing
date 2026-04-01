@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS psa10_sales (
     sale_price REAL NOT NULL,
     sale_date DATE NOT NULL,
     listing_title TEXT,
-    source TEXT DEFAULT '130point',
+    source TEXT DEFAULT 'ebay',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

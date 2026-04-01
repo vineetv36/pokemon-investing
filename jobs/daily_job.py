@@ -82,8 +82,8 @@ def run_daily_job(days_back=7):
 
     logger.info("Processing %d active cards...", len(cards))
 
-    # Step 1: Scrape 130point for each card (uses Playwright)
-    logger.info("--- Step 1: Scraping 130point.com ---")
+    # Step 1: Scrape eBay sold listings for each card
+    logger.info("--- Step 1: Scraping eBay sold listings ---")
     for card in cards:
         try:
             scrape_130point_for_card(card, days_back)
