@@ -6,3 +6,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Local data files (Parquet, DuckDB) — too large for git
+data/*.parquet
+data/*.duckdb
+data/*.csv
