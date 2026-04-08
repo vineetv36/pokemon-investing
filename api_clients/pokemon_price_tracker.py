@@ -241,21 +241,51 @@ def _extract_prices(card_data: dict) -> dict:
     if psa10_price is not None:
         result["psa10_price"] = float(psa10_price)
 
-    # Price history — array of {date, price, ...} or {date, tcgplayer: {market}, ...}
-    history = card_data.get("priceHistory", [])
+    # Price history — multiple possible formats:
+    #   1. Dict: {"2026-01-15": 125.50, ...} (date keys, price values)
+    #   2. List of dicts: [{"date": "...", "price": ...}, ...]
+    #   3. List of lists: [["2026-01-15", 125.50], ...]
+    #   4. List of dicts with nested: [{"date": "...", "tcgplayer": {"market": ...}}, ...]
+    history = card_data.get("priceHistory", {})
     if history:
         result["history"] = []
-        for point in history:
-            d = point.get("date")
-            # Try nested tcgplayer.market first, then flat price
-            tcg = point.get("tcgplayer", {})
-            p = tcg.get("market") or point.get("price")
-            psa10_h = point.get("psa10")
-            if d and p:
-                entry = {"date": d, "price": float(p)}
-                if psa10_h is not None:
-                    entry["psa10"] = float(psa10_h)
-                result["history"].append(entry)
+
+        if isinstance(history, dict):
+            # Format 1: {date_string: price_value, ...}
+            for d, val in history.items():
+                if isinstance(val, (int, float)):
+                    result["history"].append({"date": d, "price": float(val)})
+                elif isinstance(val, dict):
+                    p = val.get("market") or val.get("price")
+                    if p is not None:
+                        entry = {"date": d, "price": float(p)}
+                        psa10_h = val.get("psa10")
+                        if psa10_h is not None:
+                            entry["psa10"] = float(psa10_h)
+                        result["history"].append(entry)
+
+        elif isinstance(history, list):
+            # Log first element to understand format
+            if history and not isinstance(history[0], dict):
+                logger.info("priceHistory format sample: %s (type: %s)",
+                            repr(history[0])[:100], type(history[0]).__name__)
+
+            for point in history:
+                if isinstance(point, dict):
+                    # Format 2 or 4: {"date": ..., "price": ...}
+                    d = point.get("date")
+                    tcg = point.get("tcgplayer", {}) if isinstance(point.get("tcgplayer"), dict) else {}
+                    p = tcg.get("market") or point.get("price") or point.get("market")
+                    psa10_h = point.get("psa10")
+                    if d and p:
+                        entry = {"date": d, "price": float(p)}
+                        if psa10_h is not None:
+                            entry["psa10"] = float(psa10_h)
+                        result["history"].append(entry)
+                elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                    # Format 3: [date, price]
+                    result["history"].append({"date": str(point[0]), "price": float(point[1])})
+                # Skip strings or other unexpected types
 
     return result
 
