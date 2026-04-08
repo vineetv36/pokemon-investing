@@ -31,7 +31,7 @@ API_KEY = os.getenv("POKEMON_PRICE_TRACKER_API_KEY", "")
 DAILY_CREDIT_LIMIT = 20000
 REQUESTS_PER_MINUTE = 60
 _credits_used = 0
-_request_times = []  # sliding window for rate limiting
+_last_request_time = 0.0
 
 # SSL context (needed in some environments)
 _ssl_ctx = ssl.create_default_context()
@@ -47,15 +47,13 @@ def _get_headers() -> dict:
 
 
 def _rate_limit():
-    """Enforce 60 requests/minute sliding window."""
-    global _request_times
+    """Enforce minimum 2 seconds between every request (30 req/min max)."""
+    global _last_request_time
     now = time.time()
-    _request_times = [t for t in _request_times if now - t < 60]
-    if len(_request_times) >= REQUESTS_PER_MINUTE:
-        wait = 60 - (now - _request_times[0]) + 0.1
-        logger.info("Rate limit: waiting %.1fs...", wait)
-        time.sleep(wait)
-    _request_times.append(time.time())
+    elapsed = now - _last_request_time
+    if elapsed < 2.0:
+        time.sleep(2.0 - elapsed)
+    _last_request_time = time.time()
 
 
 def _make_request(endpoint: str, params: Optional[dict] = None,

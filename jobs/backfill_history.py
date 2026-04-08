@@ -30,10 +30,7 @@ from api_clients.pokemon_price_tracker import (
     fetch_and_store_history, search_card, store_raw_price, store_psa10_price,
 )
 
-# Delay between API calls to avoid 429s.
-# Per-card fallback makes 2 calls per card (search_card sends 2 requests),
-# so we need ~2s per call to stay under 60 req/min.
-DELAY_BETWEEN_CALLS = 5  # seconds
+# API client enforces 2s between requests. No extra delay needed here.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -233,7 +230,6 @@ def backfill(days: int = 180, source: str = "watchlist",
                 card_info["number"], card_info["image_url"],
             )
 
-            time.sleep(DELAY_BETWEEN_CALLS)
             stored = fetch_and_store_history(
                 card_id, card_info["name"], card_info["set_name"], days=days)
             set_stored += stored
