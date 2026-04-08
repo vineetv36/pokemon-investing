@@ -1,10 +1,10 @@
 """Client for PokemonPriceTracker API (paid tier).
 
-Supports:
-- Single card lookup with PSA graded prices
-- Bulk fetch (up to 100 cards per request)
-- 6-month historical price data (daily granularity)
-- PSA 8/9/10 pricing from eBay completed listings
+Endpoint: GET /api/v2/cards
+  Params: search, setId, tcgPlayerId, includeHistory, days, maxDataPoints,
+          fetchAllInSet, limit, sortBy, includeEbay
+
+History is returned inline via includeHistory=true&days=180, NOT a separate endpoint.
 
 Paid tier: ~20,000 credits/day, 60 req/min, 6 months history.
 """
@@ -13,7 +13,7 @@ import logging
 import os
 import ssl
 import time
-from datetime import date, timedelta
+from datetime import date
 from typing import Optional
 
 import httpx
@@ -50,7 +50,6 @@ def _rate_limit():
     """Enforce 60 requests/minute sliding window."""
     global _request_times
     now = time.time()
-    # Remove requests older than 60 seconds
     _request_times = [t for t in _request_times if now - t < 60]
     if len(_request_times) >= REQUESTS_PER_MINUTE:
         wait = 60 - (now - _request_times[0]) + 0.1
@@ -59,9 +58,9 @@ def _rate_limit():
     _request_times.append(time.time())
 
 
-def _make_request(method: str, endpoint: str, params: Optional[dict] = None,
-                  json_body: Optional[dict] = None, credits: int = 1) -> Optional[dict]:
-    """Make an authenticated request with rate limiting and retries."""
+def _make_request(endpoint: str, params: Optional[dict] = None,
+                  credits: int = 1) -> Optional[dict]:
+    """Make an authenticated GET request with rate limiting and retries."""
     global _credits_used
 
     if _credits_used + credits > DAILY_CREDIT_LIMIT:
@@ -71,26 +70,19 @@ def _make_request(method: str, endpoint: str, params: Optional[dict] = None,
 
     _rate_limit()
 
-    url = f"{BASE_URL}{endpoint}" if endpoint.startswith("/") else f"https://www.pokemonpricetracker.com{endpoint}"
+    url = f"{BASE_URL}{endpoint}"
+    logger.info("HTTP Request: GET %s params=%s", url, params)
 
     try:
-        if method == "GET":
-            response = httpx.get(url, headers=_get_headers(), params=params,
-                                 timeout=30, verify=_ssl_ctx)
-        else:
-            response = httpx.post(url, headers=_get_headers(), json=json_body,
-                                  timeout=30, verify=_ssl_ctx)
+        response = httpx.get(url, headers=_get_headers(), params=params,
+                             timeout=30, verify=_ssl_ctx)
 
         if response.status_code == 429:
             for backoff in [60, 120, 240]:
                 logger.warning("Rate limited (429). Backing off %ds...", backoff)
                 time.sleep(backoff)
-                if method == "GET":
-                    response = httpx.get(url, headers=_get_headers(), params=params,
-                                         timeout=30, verify=_ssl_ctx)
-                else:
-                    response = httpx.post(url, headers=_get_headers(), json=json_body,
-                                          timeout=30, verify=_ssl_ctx)
+                response = httpx.get(url, headers=_get_headers(), params=params,
+                                     timeout=30, verify=_ssl_ctx)
                 if response.status_code != 429:
                     break
             if response.status_code == 429:
@@ -101,8 +93,20 @@ def _make_request(method: str, endpoint: str, params: Optional[dict] = None,
             logger.error("API key invalid (401). Check POKEMON_PRICE_TRACKER_API_KEY.")
             return None
 
+        if response.status_code == 404:
+            logger.warning("404 for %s — card not found", url)
+            return None
+
         response.raise_for_status()
         _credits_used += credits
+
+        # Parse response — guard against HTML responses
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type and "text/json" not in content_type:
+            logger.error("Non-JSON response (content-type: %s): %s",
+                         content_type, response.text[:200])
+            return None
+
         return response.json()
 
     except httpx.HTTPStatusError as e:
@@ -115,83 +119,44 @@ def _make_request(method: str, endpoint: str, params: Optional[dict] = None,
 
 # --- Card Lookup ---
 
-def search_card(name: str, set_id: Optional[str] = None) -> Optional[dict]:
-    """Search for a card by name and optionally set ID."""
+def search_card(name: str, set_name: Optional[str] = None,
+                include_history: bool = False, days: int = 0) -> Optional[dict]:
+    """Search for a card by name, optionally with price history.
+
+    GET /api/v2/cards?search=charizard&setId=base1&includeHistory=true&days=180
+    """
     params = {"search": name}
-    if set_id:
-        params["setId"] = set_id
-    return _make_request("GET", "/cards", params)
+    if set_name:
+        params["setId"] = set_name
+    if include_history and days > 0:
+        params["includeHistory"] = "true"
+        params["days"] = days
+    return _make_request("/cards", params)
 
 
-def get_card(tcgplayer_id: str, include_ebay: bool = True) -> Optional[dict]:
-    """Fetch card data by TCGPlayer ID with optional eBay price data."""
+def get_card_by_tcgplayer_id(tcgplayer_id: str, include_history: bool = False,
+                              days: int = 0) -> Optional[dict]:
+    """Fetch card by TCGPlayer ID, optionally with history."""
     params = {"tcgPlayerId": tcgplayer_id}
-    if include_ebay:
-        params["includeEbay"] = "true"
-    return _make_request("GET", "/cards", params)
+    if include_history and days > 0:
+        params["includeHistory"] = "true"
+        params["days"] = days
+    return _make_request("/cards", params)
 
 
 def get_sets() -> Optional[dict]:
     """Fetch all available sets."""
-    return _make_request("GET", "/sets")
+    return _make_request("/sets")
 
 
-def get_all_cards_in_set(set_id: str) -> Optional[dict]:
-    """Fetch all cards in a set using bulk fetch (1 credit per card)."""
-    params = {"setId": set_id, "fetchAllInSet": "true"}
-    return _make_request("GET", "/cards", params, credits=0)  # credits counted per card returned
-
-
-# --- Bulk Operations ---
-
-def bulk_fetch_cards(card_ids: list) -> Optional[list]:
-    """Fetch up to 100 cards in a single request.
-
-    Args:
-        card_ids: List of card IDs (up to 100)
-
-    Returns:
-        List of card data dicts, or None on error.
-    """
-    if len(card_ids) > 100:
-        logger.warning("Bulk fetch limited to 100 cards. Truncating.")
-        card_ids = card_ids[:100]
-
-    # Credits = 1 per card, minute calls = ceil(cards/10) capped at 30
-    import math
-    credits = len(card_ids)
-    minute_calls = min(math.ceil(len(card_ids) / 10), 30)
-
-    data = _make_request("POST", "/api/cards/bulk", json_body={"ids": card_ids},
-                         credits=credits)
-    return data
-
-
-# --- PSA Graded Prices ---
-
-def get_psa_pricing(card_id: str) -> Optional[dict]:
-    """Fetch PSA graded pricing for a card (all grades PSA 1-10).
-
-    Returns dict with psa_1 through psa_10, each containing
-    market_price and last_sold.
-    """
-    return _make_request("GET", f"/api/psa/pricing/{card_id}")
-
-
-# --- Historical Data ---
-
-def get_price_history(card_id: str, period: str = "6m") -> Optional[dict]:
-    """Fetch historical price data for a card.
-
-    Args:
-        card_id: Card identifier
-        period: Time period - "3d" (free), "6m" (paid), "1y" (business)
-
-    Returns:
-        Dict with data_points (date, price, volume) and statistics.
-    """
-    params = {"period": period}
-    return _make_request("GET", f"/cards/{card_id}/history", params)
+def get_all_cards_in_set(set_id: str, include_history: bool = False,
+                          days: int = 0) -> Optional[dict]:
+    """Fetch all cards in a set (1 credit per card returned)."""
+    params = {"set": set_id, "fetchAllInSet": "true"}
+    if include_history and days > 0:
+        params["includeHistory"] = "true"
+        params["days"] = days
+    return _make_request("/cards", params, credits=0)
 
 
 # --- Storage ---
@@ -235,75 +200,132 @@ def store_psa10_price(card_id: int, price: float, recorded_date: Optional[date] 
         conn.close()
 
 
-def fetch_and_store_card_prices(card_id: int, card_name: str, set_name: str) -> Optional[dict]:
-    """Fetch and store both raw NM and PSA 10 prices for a card.
+def _extract_cards_list(data: dict) -> list:
+    """Extract list of card dicts from API response (handles multiple formats)."""
+    if isinstance(data, list):
+        return data
+    if "data" in data:
+        return data["data"] if isinstance(data["data"], list) else [data["data"]]
+    if "cards" in data:
+        return data["cards"] if isinstance(data["cards"], list) else [data["cards"]]
+    return [data]
 
-    This is the main function to call from the daily job.
-    Returns dict with raw_price and psa10_price, or None.
+
+def _extract_prices(card_data: dict) -> dict:
+    """Extract raw, PSA 10, and history from a card response."""
+    result = {}
+
+    # Raw NM price — try multiple field names
+    prices = card_data.get("prices", {})
+    raw_price = (
+        prices.get("market")
+        or card_data.get("marketPrice")
+        or card_data.get("market_price")
+        or card_data.get("tcgplayer_price")
+        or card_data.get("price")
+    )
+    if raw_price is not None:
+        result["raw_price"] = float(raw_price)
+
+    # PSA 10 price — try multiple locations
+    graded = card_data.get("gradedPrices", {})
+    ebay = card_data.get("ebay", {})
+    psa10 = ebay.get("psa10", {})
+
+    psa10_price = (
+        graded.get("psa10")
+        or psa10.get("avg")
+        or psa10.get("market_price")
+        or psa10.get("last_sold")
+    )
+    if psa10_price is not None:
+        result["psa10_price"] = float(psa10_price)
+
+    # Price history — array of {date, price, ...} or {date, tcgplayer: {market}, ...}
+    history = card_data.get("priceHistory", [])
+    if history:
+        result["history"] = []
+        for point in history:
+            d = point.get("date")
+            # Try nested tcgplayer.market first, then flat price
+            tcg = point.get("tcgplayer", {})
+            p = tcg.get("market") or point.get("price")
+            psa10_h = point.get("psa10")
+            if d and p:
+                entry = {"date": d, "price": float(p)}
+                if psa10_h is not None:
+                    entry["psa10"] = float(psa10_h)
+                result["history"].append(entry)
+
+    return result
+
+
+def fetch_and_store_card_prices(card_id: int, card_name: str,
+                                 set_name: str) -> Optional[dict]:
+    """Fetch and store both raw NM and PSA 10 prices for a card (current only).
+
+    This is the main function for daily_job.py.
     """
     data = search_card(card_name, set_name)
     if not data:
         return None
 
-    # Parse response - handle various response formats
-    cards = data if isinstance(data, list) else data.get("data", data.get("cards", []))
+    cards = _extract_cards_list(data)
     if not cards:
         logger.warning("No results for %s (%s)", card_name, set_name)
         return None
 
-    card_data = cards[0] if isinstance(cards, list) else cards
-    result = {}
+    prices = _extract_prices(cards[0])
 
-    # Raw NM price
-    raw_price = (
-        card_data.get("market_price")
-        or card_data.get("tcgplayer_price")
-        or card_data.get("price")
-    )
-    if raw_price is not None:
-        raw_price = float(raw_price)
-        store_raw_price(card_id, raw_price)
-        result["raw_price"] = raw_price
-        logger.info("Card %s: raw NM = $%.2f", card_name, raw_price)
+    if "raw_price" in prices:
+        store_raw_price(card_id, prices["raw_price"])
+        logger.info("Card %s: raw NM = $%.2f", card_name, prices["raw_price"])
 
-    # PSA 10 price from eBay data
-    ebay_data = card_data.get("ebay", {})
-    psa10_data = ebay_data.get("psa10", {})
-    psa10_price = psa10_data.get("avg") or psa10_data.get("market_price") or psa10_data.get("last_sold")
+    if "psa10_price" in prices:
+        store_psa10_price(card_id, prices["psa10_price"])
+        logger.info("Card %s: PSA 10 = $%.2f", card_name, prices["psa10_price"])
 
-    # Also check gradedPrices field
-    if not psa10_price:
-        graded = card_data.get("gradedPrices", {})
-        psa10_price = graded.get("psa10")
-
-    if psa10_price is not None:
-        psa10_price = float(psa10_price)
-        store_psa10_price(card_id, psa10_price)
-        result["psa10_price"] = psa10_price
-        logger.info("Card %s: PSA 10 = $%.2f", card_name, psa10_price)
-
-    return result if result else None
+    return prices if prices else None
 
 
-def fetch_and_store_history(card_id: int, api_card_id: str, period: str = "6m"):
-    """Fetch 6-month historical prices and store daily entries.
+def fetch_and_store_history(card_id: int, card_name: str,
+                            set_name: Optional[str] = None,
+                            days: int = 180) -> int:
+    """Fetch historical prices and store daily entries.
 
-    This backfills raw_prices with historical data points.
+    Uses: GET /api/v2/cards?search=name&setId=set&includeHistory=true&days=180
+
+    Stores raw prices from priceHistory array into raw_prices table,
+    and PSA 10 prices into psa10_sales table.
     """
-    data = get_price_history(api_card_id, period)
+    data = search_card(card_name, set_name, include_history=True, days=days)
     if not data:
         return 0
 
-    data_points = data.get("data_points", data.get("data", []))
-    if not data_points:
-        logger.warning("No history data for card %s", api_card_id)
+    cards = _extract_cards_list(data)
+    if not cards:
+        logger.warning("No results for %s", card_name)
+        return 0
+
+    prices = _extract_prices(cards[0])
+
+    # Store current price
+    if "raw_price" in prices:
+        store_raw_price(card_id, prices["raw_price"])
+    if "psa10_price" in prices:
+        store_psa10_price(card_id, prices["psa10_price"])
+
+    # Store historical prices
+    history = prices.get("history", [])
+    if not history:
+        logger.warning("No history data for %s", card_name)
         return 0
 
     conn = get_connection()
     cursor = conn.cursor()
     stored = 0
 
-    for point in data_points:
+    for point in history:
         d = point.get("date")
         p = point.get("price")
         if d and p:
@@ -317,9 +339,23 @@ def fetch_and_store_history(card_id: int, api_card_id: str, period: str = "6m"):
             except Exception as e:
                 logger.error("Error storing history point: %s", e)
 
+        # Store PSA 10 history if available
+        psa10_h = point.get("psa10")
+        if d and psa10_h:
+            try:
+                cursor.execute(
+                    """INSERT OR IGNORE INTO psa10_sales
+                       (card_id, sale_price, sale_date, listing_title, source)
+                       VALUES (?, ?, ?, 'PokemonPriceTracker PSA 10 history', 'pokemonpricetracker')""",
+                    (card_id, float(psa10_h), d),
+                )
+                stored += cursor.rowcount
+            except Exception as e:
+                logger.error("Error storing PSA 10 history point: %s", e)
+
     conn.commit()
     conn.close()
-    logger.info("Stored %d historical price points for card %d", stored, card_id)
+    logger.info("Stored %d historical price points for card %d (%s)", stored, card_id, card_name)
     return stored
 
 

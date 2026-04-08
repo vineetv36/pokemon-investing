@@ -6,7 +6,7 @@ cards into the SQLite cards table as it goes.
 
 Usage:
     python3 jobs/backfill_history.py                          # watchlist, 6 months
-    python3 jobs/backfill_history.py --period 3m              # 3 months
+    python3 jobs/backfill_history.py --days 90                # 3 months
     python3 jobs/backfill_history.py --min-price 20           # only cards >= $20
     python3 jobs/backfill_history.py --source catalog         # full catalog instead of watchlist
     python3 jobs/backfill_history.py --resume                 # skip cards already in raw_prices
@@ -102,7 +102,7 @@ def _get_cards_with_history() -> set:
     return result
 
 
-def backfill(period: str = "6m", source: str = "watchlist",
+def backfill(days: int = 180, source: str = "watchlist",
              min_price: float = 5.0, resume: bool = False):
     """Backfill historical prices for cards in the Parquet catalog."""
     init_db()
@@ -123,7 +123,7 @@ def backfill(period: str = "6m", source: str = "watchlist",
     processed = 0
     skipped = 0
 
-    logger.info("Backfilling %s of history for up to %d cards...", period, total_cards)
+    logger.info("Backfilling %d days of history for up to %d cards...", days, total_cards)
     logger.info("Credits available: %d", get_credits_remaining())
 
     for i, (_, row) in enumerate(df.iterrows()):
@@ -149,7 +149,7 @@ def backfill(period: str = "6m", source: str = "watchlist",
                     i + 1, total_cards, name, set_name, number,
                     row.get("price_market", 0) or 0, credits)
 
-        stored = fetch_and_store_history(card_id, name, period)
+        stored = fetch_and_store_history(card_id, name, set_name, days=days)
         total_stored += stored
         processed += 1
 
@@ -164,8 +164,8 @@ def backfill(period: str = "6m", source: str = "watchlist",
 def main():
     parser = argparse.ArgumentParser(
         description="Backfill historical prices from PokemonPriceTracker for all cards in catalog")
-    parser.add_argument("--period", type=str, default="6m",
-                        help="History period: 3d, 1m, 3m, 6m (default: 6m)")
+    parser.add_argument("--days", type=int, default=180,
+                        help="Days of history to fetch (default: 180)")
     parser.add_argument("--source", type=str, default="watchlist", choices=["watchlist", "catalog"],
                         help="Card source: 'watchlist' (filtered) or 'catalog' (all) (default: watchlist)")
     parser.add_argument("--min-price", type=float, default=5.0,
@@ -173,7 +173,7 @@ def main():
     parser.add_argument("--resume", action="store_true",
                         help="Skip cards that already have history in the database")
     args = parser.parse_args()
-    backfill(period=args.period, source=args.source,
+    backfill(days=args.days, source=args.source,
              min_price=args.min_price, resume=args.resume)
 
 
