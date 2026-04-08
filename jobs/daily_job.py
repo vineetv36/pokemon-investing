@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db import get_connection, init_db
 from scrapers.point130_scraper import scrape_card_sales, store_psa10_sales
 from scrapers.reddit_scraper import scrape_all_subreddits, store_reddit_mentions
-from api_clients.pokemon_price_tracker import fetch_and_store_raw_price, get_credits_remaining
+from api_clients.pokemon_price_tracker import fetch_and_store_card_prices, get_credits_remaining
 from analysis.sentiment import analyze_posts, compute_daily_sentiment
 from analysis.ratio_calculator import calculate_momentum_score
 
@@ -90,18 +90,18 @@ def run_daily_job(days_back=7):
         except Exception as e:
             logger.error("Error scraping 130point for %s: %s", card["name"], e)
 
-    # Step 2: Fetch raw prices from PokemonPriceTracker
-    # TODO: Uncomment when API rate limiting is resolved
-    # logger.info("--- Step 2: Fetching prices from PokemonPriceTracker ---")
-    # for card in cards:
-    #     if get_credits_remaining() <= 10:
-    #         logger.warning("Low on API credits. Stopping price fetches.")
-    #         break
-    #     try:
-    #         fetch_and_store_raw_price(card["id"], card["name"], card["set_name"])
-    #     except Exception as e:
-    #         logger.error("Error fetching price for %s: %s", card["name"], e)
-    logger.info("--- Step 2: Skipping PokemonPriceTracker (disabled) ---")
+    # Step 2: Fetch raw + PSA 10 prices from PokemonPriceTracker (paid tier)
+    logger.info("--- Step 2: Fetching prices from PokemonPriceTracker ---")
+    for card in cards:
+        if get_credits_remaining() <= 100:
+            logger.warning("Low on API credits (%d remaining). Stopping.", get_credits_remaining())
+            break
+        try:
+            result = fetch_and_store_card_prices(card["id"], card["name"], card["set_name"])
+            if result:
+                logger.info("Card %s: %s", card["name"], result)
+        except Exception as e:
+            logger.error("Error fetching price for %s: %s", card["name"], e)
 
     # Step 3: Scrape Reddit
     logger.info("--- Step 3: Scraping Reddit ---")
