@@ -1,10 +1,18 @@
 """Client for PokemonPriceTracker API (paid tier).
 
 Endpoint: GET /api/v2/cards
-  Params: search, setId, tcgPlayerId, includeHistory, days, maxDataPoints,
-          fetchAllInSet, limit, sortBy, includeEbay
+  Params: search, set (partial name match), setId (TCGPlayer GroupId),
+          tcgPlayerId, includeHistory, includeEbay, includeBoth,
+          days, maxDataPoints, fetchAllInSet, limit, sortBy
 
-History is returned inline via includeHistory=true&days=180, NOT a separate endpoint.
+History format (includeHistory=true):
+  priceHistory.conditions["Near Mint"].history[{date, market, volume}, ...]
+
+PSA 10 format (includeEbay=true):
+  ebay.salesByGrade.psa10.{averagePrice, medianPrice, marketPrice7Day, ...}
+
+Credit costs: cards_returned × (1 + includeHistory + includeEbay)
+  includeBoth=true is shorthand for includeHistory + includeEbay (3 credits/card)
 
 Paid tier: ~20,000 credits/day, 60 req/min, 6 months history.
 """
@@ -118,18 +126,35 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
 # --- Card Lookup ---
 
 def search_card(name: str, set_name: Optional[str] = None,
-                include_history: bool = False, days: int = 0) -> Optional[dict]:
-    """Search for a card by name, optionally with price history.
+                include_history: bool = False, days: int = 0,
+                include_ebay: bool = False) -> Optional[dict]:
+    """Search for a card by name, optionally with price history and eBay data.
 
-    GET /api/v2/cards?search=charizard&setId=base1&includeHistory=true&days=180
+    GET /api/v2/cards?search=charizard&set=Base Set&includeHistory=true&days=180
+    Note: 'set' param accepts partial name match (e.g., "base set").
     """
     params = {"search": name}
     if set_name:
-        params["setId"] = set_name
-    if include_history and days > 0:
+        # Use 'set' param (partial name match), NOT 'setId' (numeric TCGPlayer GroupId)
+        params["set"] = set_name
+    if include_history and include_ebay:
+        params["includeBoth"] = "true"
+        if days > 0:
+            params["days"] = days
+    elif include_history:
         params["includeHistory"] = "true"
-        params["days"] = days
-    return _make_request("/cards", params)
+        if days > 0:
+            params["days"] = days
+    elif include_ebay:
+        params["includeEbay"] = "true"
+
+    # Credit cost: 1 base + 1 for history + 1 for ebay per card returned
+    credits = 1
+    if include_history:
+        credits += 1
+    if include_ebay:
+        credits += 1
+    return _make_request("/cards", params, credits=credits)
 
 
 def get_card_by_tcgplayer_id(tcgplayer_id: str, include_history: bool = False,
@@ -147,13 +172,27 @@ def get_sets() -> Optional[dict]:
     return _make_request("/sets")
 
 
-def get_all_cards_in_set(set_id: str, include_history: bool = False,
-                          days: int = 0) -> Optional[dict]:
-    """Fetch all cards in a set (1 credit per card returned)."""
-    params = {"set": set_id, "fetchAllInSet": "true"}
-    if include_history and days > 0:
+def get_all_cards_in_set(set_name: str, include_history: bool = False,
+                          days: int = 0, include_ebay: bool = False) -> Optional[dict]:
+    """Fetch all cards in a set using human-readable set name.
+
+    Uses 'set' param (partial name match, e.g., "Base Set", "Neo Genesis").
+    With fetchAllInSet=true, limit increases to 200 (100 with history, 50 with both).
+
+    Credit cost: cards_returned × (1 + includeHistory + includeEbay).
+    """
+    params = {"set": set_name, "fetchAllInSet": "true"}
+    if include_history and include_ebay:
+        params["includeBoth"] = "true"
+        if days > 0:
+            params["days"] = days
+    elif include_history:
         params["includeHistory"] = "true"
-        params["days"] = days
+        if days > 0:
+            params["days"] = days
+    elif include_ebay:
+        params["includeEbay"] = "true"
+    # Credits are per-card-returned; pass 0 here and track manually if needed
     return _make_request("/cards", params, credits=0)
 
 
@@ -210,80 +249,121 @@ def _extract_cards_list(data: dict) -> list:
 
 
 def _extract_prices(card_data: dict) -> dict:
-    """Extract raw, PSA 10, and history from a card response."""
+    """Extract raw NM price, PSA 10 price, and history from API response.
+
+    Handles the actual PokemonPriceTracker API v2 response format:
+
+    Top-level price fields:
+      marketPrice, lowPrice, midPrice, highPrice, directLowPrice
+
+    priceHistory (when includeHistory=true):
+      {
+        "conditions": {
+          "Near Mint": {
+            "history": [{"date": "2024-01-15T00:00:00Z", "market": 420, "volume": 12}, ...],
+            "latestPrice": 420,
+            "priceRange": {"min": 380, "max": 450}
+          }
+        }
+      }
+
+    ebay (when includeEbay=true):
+      {
+        "salesByGrade": {
+          "psa10": {
+            "averagePrice": 15000,
+            "medianPrice": 14500,
+            "marketPrice7Day": 14800,
+            "smartMarketPrice": {...},
+            "salesCount": 25,
+            "lastSoldDate": "...",
+            "lastSoldPrice": 14200
+          }
+        }
+      }
+    """
     result = {}
 
-    # Raw NM price — try multiple field names
-    prices = card_data.get("prices", {})
+    # --- Raw NM price ---
     raw_price = (
-        prices.get("market")
-        or card_data.get("marketPrice")
-        or card_data.get("market_price")
-        or card_data.get("tcgplayer_price")
+        card_data.get("marketPrice")
+        or card_data.get("lowPrice")
+        or card_data.get("midPrice")
         or card_data.get("price")
     )
+    # Also check nested "prices" dict as fallback
+    if raw_price is None:
+        prices = card_data.get("prices", {})
+        if isinstance(prices, dict):
+            raw_price = prices.get("market") or prices.get("low") or prices.get("mid")
     if raw_price is not None:
         result["raw_price"] = float(raw_price)
 
-    # PSA 10 price — try multiple locations
-    graded = card_data.get("gradedPrices", {})
+    # --- PSA 10 price from eBay graded sales ---
     ebay = card_data.get("ebay", {})
-    psa10 = ebay.get("psa10", {})
+    if isinstance(ebay, dict):
+        sales_by_grade = ebay.get("salesByGrade", {})
+        if isinstance(sales_by_grade, dict):
+            psa10 = sales_by_grade.get("psa10", {})
+            if isinstance(psa10, dict):
+                psa10_price = (
+                    psa10.get("marketPrice7Day")
+                    or psa10.get("medianPrice")
+                    or psa10.get("averagePrice")
+                    or psa10.get("lastSoldPrice")
+                )
+                if psa10_price is not None:
+                    result["psa10_price"] = float(psa10_price)
+                    result["psa10_sales_count"] = psa10.get("salesCount", 0)
+                    result["psa10_last_sold_date"] = psa10.get("lastSoldDate")
 
-    psa10_price = (
-        graded.get("psa10")
-        or psa10.get("avg")
-        or psa10.get("market_price")
-        or psa10.get("last_sold")
-    )
-    if psa10_price is not None:
-        result["psa10_price"] = float(psa10_price)
+    # --- Price history (nested under conditions) ---
+    price_history = card_data.get("priceHistory", {})
+    if isinstance(price_history, dict):
+        conditions = price_history.get("conditions", {})
+        if isinstance(conditions, dict):
+            # Prefer "Near Mint", fall back to first available condition
+            nm_data = (
+                conditions.get("Near Mint")
+                or conditions.get("Holofoil")
+                or conditions.get("Normal")
+                or (next(iter(conditions.values())) if conditions else None)
+            )
+            if isinstance(nm_data, dict):
+                history_list = nm_data.get("history", [])
+                if isinstance(history_list, list) and history_list:
+                    result["history"] = []
+                    for point in history_list:
+                        if not isinstance(point, dict):
+                            continue
+                        d = point.get("date")
+                        p = point.get("market") or point.get("price")
+                        if d and p is not None:
+                            entry = {"date": d, "price": float(p)}
+                            vol = point.get("volume")
+                            if vol is not None:
+                                entry["volume"] = int(vol)
+                            result["history"].append(entry)
 
-    # Price history — multiple possible formats:
-    #   1. Dict: {"2026-01-15": 125.50, ...} (date keys, price values)
-    #   2. List of dicts: [{"date": "...", "price": ...}, ...]
-    #   3. List of lists: [["2026-01-15", 125.50], ...]
-    #   4. List of dicts with nested: [{"date": "...", "tcgplayer": {"market": ...}}, ...]
-    history = card_data.get("priceHistory", {})
-    if history:
-        result["history"] = []
-
-        if isinstance(history, dict):
-            # Format 1: {date_string: price_value, ...}
-            for d, val in history.items():
-                if isinstance(val, (int, float)):
-                    result["history"].append({"date": d, "price": float(val)})
-                elif isinstance(val, dict):
-                    p = val.get("market") or val.get("price")
-                    if p is not None:
-                        entry = {"date": d, "price": float(p)}
-                        psa10_h = val.get("psa10")
-                        if psa10_h is not None:
-                            entry["psa10"] = float(psa10_h)
-                        result["history"].append(entry)
-
-        elif isinstance(history, list):
-            # Log first element to understand format
-            if history and not isinstance(history[0], dict):
-                logger.info("priceHistory format sample: %s (type: %s)",
-                            repr(history[0])[:100], type(history[0]).__name__)
-
-            for point in history:
+        # Fallback: if conditions is empty but priceHistory is a flat list
+        if "history" not in result and isinstance(price_history, list):
+            result["history"] = []
+            for point in price_history:
                 if isinstance(point, dict):
-                    # Format 2 or 4: {"date": ..., "price": ...}
                     d = point.get("date")
-                    tcg = point.get("tcgplayer", {}) if isinstance(point.get("tcgplayer"), dict) else {}
-                    p = tcg.get("market") or point.get("price") or point.get("market")
-                    psa10_h = point.get("psa10")
-                    if d and p:
-                        entry = {"date": d, "price": float(p)}
-                        if psa10_h is not None:
-                            entry["psa10"] = float(psa10_h)
-                        result["history"].append(entry)
-                elif isinstance(point, (list, tuple)) and len(point) >= 2:
-                    # Format 3: [date, price]
-                    result["history"].append({"date": str(point[0]), "price": float(point[1])})
-                # Skip strings or other unexpected types
+                    p = point.get("market") or point.get("price")
+                    if d and p is not None:
+                        result["history"].append({"date": d, "price": float(p)})
+
+    # Fallback: priceHistory is directly a list (older format)
+    if "history" not in result and isinstance(price_history, list):
+        result["history"] = []
+        for point in price_history:
+            if isinstance(point, dict):
+                d = point.get("date")
+                p = point.get("market") or point.get("price")
+                if d and p is not None:
+                    result["history"].append({"date": d, "price": float(p)})
 
     return result
 
@@ -293,8 +373,9 @@ def fetch_and_store_card_prices(card_id: int, card_name: str,
     """Fetch and store both raw NM and PSA 10 prices for a card (current only).
 
     This is the main function for daily_job.py.
+    Uses includeEbay=true to get PSA 10 graded sales data.
     """
-    data = search_card(card_name, set_name)
+    data = search_card(card_name, set_name, include_ebay=True)
     if not data:
         return None
 
@@ -321,12 +402,13 @@ def fetch_and_store_history(card_id: int, card_name: str,
                             days: int = 180) -> int:
     """Fetch historical prices and store daily entries.
 
-    Uses: GET /api/v2/cards?search=name&setId=set&includeHistory=true&days=180
+    Uses: GET /api/v2/cards?search=name&set=<set name>&includeBoth=true&days=180
 
-    Stores raw prices from priceHistory array into raw_prices table,
-    and PSA 10 prices into psa10_sales table.
+    Stores raw NM prices from priceHistory.conditions into raw_prices table,
+    and PSA 10 prices from ebay.salesByGrade into psa10_sales table.
     """
-    data = search_card(card_name, set_name, include_history=True, days=days)
+    data = search_card(card_name, set_name, include_history=True,
+                       include_ebay=True, days=days)
     if not data:
         return 0
 

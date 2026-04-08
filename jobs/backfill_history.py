@@ -208,7 +208,6 @@ def backfill(days: int = 180, source: str = "watchlist",
             break
 
         set_name = set_info["set_name"]
-        set_id = set_info["set_id"]
         num_cards = len(set_info["cards"])
 
         if resume and set_name in skip_sets:
@@ -217,23 +216,81 @@ def backfill(days: int = 180, source: str = "watchlist",
                         i + 1, total_sets, set_name, num_cards)
             continue
 
-        logger.info("[%d/%d] Fetching %s (%d cards) — %d credits left",
+        logger.info("[%d/%d] Fetching set '%s' (%d cards) — %d credits left",
                     i + 1, total_sets, set_name, num_cards, credits)
 
+        # Try set-based bulk fetch first (1 API call for all cards in set)
         set_stored = 0
-        for card_info in set_info["cards"]:
-            if get_credits_remaining() < 100:
-                break
+        bulk_success = False
 
-            card_id = _ensure_card_in_db(
-                card_info["name"], card_info["set_name"],
-                card_info["number"], card_info["image_url"],
-            )
+        bulk_data = get_all_cards_in_set(
+            set_name, include_history=True, days=days, include_ebay=True)
 
-            stored = fetch_and_store_history(
-                card_id, card_info["name"], card_info["set_name"], days=days)
-            set_stored += stored
-            cards_processed += 1
+        if bulk_data:
+            bulk_cards = _extract_cards_list(bulk_data)
+            if bulk_cards:
+                bulk_success = True
+                logger.info("  Bulk fetch returned %d cards for '%s'",
+                            len(bulk_cards), set_name)
+
+                # Build lookup by card name+number for matching
+                wanted = {}
+                for card_info in set_info["cards"]:
+                    key = (card_info["name"].lower(), card_info["number"])
+                    wanted[key] = card_info
+
+                for api_card in bulk_cards:
+                    api_name = (api_card.get("name", "") or "").lower()
+                    api_number = api_card.get("number", "") or api_card.get("cardNumber", "")
+                    match_key = (api_name, api_number)
+
+                    card_info = wanted.get(match_key)
+                    if not card_info:
+                        # Try matching by name only
+                        for k, v in wanted.items():
+                            if k[0] == api_name:
+                                card_info = v
+                                break
+
+                    if not card_info:
+                        continue
+
+                    card_id = _ensure_card_in_db(
+                        card_info["name"], card_info["set_name"],
+                        card_info["number"], card_info["image_url"],
+                    )
+
+                    prices = _extract_prices(api_card)
+
+                    if "raw_price" in prices:
+                        store_raw_price(card_id, prices["raw_price"])
+                    if "psa10_price" in prices:
+                        store_psa10_price(card_id, prices["psa10_price"])
+
+                    history = prices.get("history", [])
+                    if history:
+                        stored = _store_history_batch(card_id, history)
+                        set_stored += stored
+
+                    cards_processed += 1
+
+        # Fallback: per-card fetch if bulk returned nothing
+        if not bulk_success:
+            logger.info("  Bulk fetch empty for '%s', falling back to per-card",
+                        set_name)
+            for card_info in set_info["cards"]:
+                if get_credits_remaining() < 100:
+                    break
+
+                card_id = _ensure_card_in_db(
+                    card_info["name"], card_info["set_name"],
+                    card_info["number"], card_info["image_url"],
+                )
+
+                stored = fetch_and_store_history(
+                    card_id, card_info["name"], card_info["set_name"], days=days)
+                set_stored += stored
+                cards_processed += 1
 
         total_stored += set_stored
         sets_processed += 1
