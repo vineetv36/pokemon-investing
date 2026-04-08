@@ -1,15 +1,16 @@
 """Backfill historical prices from PokemonPriceTracker API.
 
-Reads from data/watchlist.parquet (or data/cards_catalog.parquet) and fetches
-up to 6 months of daily price history for each card. Automatically syncs new
-cards into the SQLite cards table as it goes.
+Fetches by SET (not by card) to minimize API calls. One call per set
+returns all cards in that set with history, instead of 1 call per card.
+
+3,964 cards across ~150 sets = ~150 API calls instead of ~3,964.
 
 Usage:
     python3 jobs/backfill_history.py                          # watchlist, 6 months
     python3 jobs/backfill_history.py --days 90                # 3 months
     python3 jobs/backfill_history.py --min-price 20           # only cards >= $20
     python3 jobs/backfill_history.py --source catalog         # full catalog instead of watchlist
-    python3 jobs/backfill_history.py --resume                 # skip cards already in raw_prices
+    python3 jobs/backfill_history.py --resume                 # skip sets already fetched
 """
 
 import argparse
@@ -22,7 +23,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 
 from db import get_connection, init_db
-from api_clients.pokemon_price_tracker import fetch_and_store_history, get_credits_remaining
+from api_clients.pokemon_price_tracker import (
+    get_all_cards_in_set, get_credits_remaining, _extract_cards_list, _extract_prices,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,8 +60,6 @@ def _load_cards(source: str, min_price: float) -> pd.DataFrame:
         df = df[df["price_market"].notna() & (df["price_market"] >= min_price)]
         logger.info("Filtered to %d cards with market price >= $%.2f", len(df), min_price)
 
-    # Sort by price descending — most valuable cards first
-    df = df.sort_values("price_market", ascending=False, na_position="last")
     return df
 
 
@@ -87,24 +88,64 @@ def _ensure_card_in_db(name: str, set_name: str, number: str, image_url: str) ->
     return card_id
 
 
-def _get_cards_with_history() -> set:
-    """Get set of (name, set_name, card_number) that already have history."""
+def _get_completed_sets() -> set:
+    """Get set names that already have backfilled history."""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT DISTINCT c.name, c.set_name, c.card_number
+        SELECT DISTINCT c.set_name
         FROM raw_prices rp
         JOIN cards c ON c.id = rp.card_id
         WHERE rp.source = 'pokemonpricetracker'
+        GROUP BY c.set_name
+        HAVING COUNT(DISTINCT rp.recorded_date) > 7
     """)
-    result = {(r["name"], r["set_name"], r["card_number"]) for r in cursor.fetchall()}
+    result = {r["set_name"] for r in cursor.fetchall()}
     conn.close()
     return result
 
 
+def _store_history_batch(card_id: int, history: list):
+    """Store price history entries for a card."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    stored = 0
+
+    for point in history:
+        d = point.get("date")
+        p = point.get("price")
+        if d and p:
+            try:
+                cursor.execute(
+                    """INSERT OR IGNORE INTO raw_prices (card_id, price, source, recorded_date)
+                       VALUES (?, ?, 'pokemonpricetracker', ?)""",
+                    (card_id, float(p), d),
+                )
+                stored += cursor.rowcount
+            except Exception as e:
+                logger.error("Error storing history: %s", e)
+
+        psa10_h = point.get("psa10")
+        if d and psa10_h:
+            try:
+                cursor.execute(
+                    """INSERT OR IGNORE INTO psa10_sales
+                       (card_id, sale_price, sale_date, listing_title, source)
+                       VALUES (?, ?, ?, 'PokemonPriceTracker PSA 10 history', 'pokemonpricetracker')""",
+                    (card_id, float(psa10_h), d),
+                )
+                stored += cursor.rowcount
+            except Exception as e:
+                logger.error("Error storing PSA 10 history: %s", e)
+
+    conn.commit()
+    conn.close()
+    return stored
+
+
 def backfill(days: int = 180, source: str = "watchlist",
              min_price: float = 5.0, resume: bool = False):
-    """Backfill historical prices for cards in the Parquet catalog."""
+    """Backfill historical prices by fetching entire sets at once."""
     init_db()
 
     df = _load_cards(source, min_price)
@@ -112,58 +153,146 @@ def backfill(days: int = 180, source: str = "watchlist",
         logger.error("No cards to process.")
         return
 
-    # Skip cards that already have history
-    skip_set = set()
+    # Build a lookup of cards we want per set
+    # set_id -> list of (name, set_name, number, image_url, price_market)
+    sets = {}
+    for _, row in df.iterrows():
+        set_id = row.get("set_id", "")
+        set_name = row["set_name"]
+        if not set_id and not set_name:
+            continue
+        key = set_id or set_name
+        if key not in sets:
+            sets[key] = {"set_name": set_name, "set_id": set_id, "cards": []}
+        sets[key]["cards"].append({
+            "name": row["name"],
+            "set_name": set_name,
+            "number": row["number"],
+            "image_url": row.get("image_small", ""),
+            "price_market": row.get("price_market", 0) or 0,
+        })
+
+    # Sort sets by total value (most valuable first)
+    sorted_sets = sorted(sets.items(),
+                         key=lambda x: sum(c["price_market"] for c in x[1]["cards"]),
+                         reverse=True)
+
+    # Skip completed sets if resuming
+    skip_sets = set()
     if resume:
-        skip_set = _get_cards_with_history()
-        logger.info("Resume mode: skipping %d cards that already have history", len(skip_set))
+        skip_sets = _get_completed_sets()
+        logger.info("Resume mode: skipping %d sets that already have history", len(skip_sets))
 
-    total_cards = len(df)
+    total_sets = len(sorted_sets)
+    total_cards = sum(len(s["cards"]) for _, s in sorted_sets)
     total_stored = 0
-    processed = 0
-    skipped = 0
+    sets_processed = 0
+    cards_processed = 0
 
-    logger.info("Backfilling %d days of history for up to %d cards...", days, total_cards)
+    logger.info("Backfilling %d days of history for %d cards across %d sets",
+                days, total_cards, total_sets)
+    logger.info("~%d API calls needed (1 per set) instead of %d (1 per card)",
+                total_sets, total_cards)
     logger.info("Credits available: %d", get_credits_remaining())
 
-    for i, (_, row) in enumerate(df.iterrows()):
+    for i, (set_key, set_info) in enumerate(sorted_sets):
         credits = get_credits_remaining()
         if credits < 100:
-            logger.warning("Low on credits (%d). Stopping at card %d/%d.",
-                           credits, i + 1, total_cards)
+            logger.warning("Low on credits (%d). Stopping at set %d/%d.",
+                           credits, i + 1, total_sets)
             break
 
-        name = row["name"]
-        set_name = row["set_name"]
-        number = row["number"]
-        image_url = row.get("image_small", "")
+        set_name = set_info["set_name"]
+        set_id = set_info["set_id"]
+        num_cards = len(set_info["cards"])
 
-        if resume and (name, set_name, number) in skip_set:
-            skipped += 1
+        if resume and set_name in skip_sets:
+            cards_processed += num_cards
+            logger.info("[%d/%d] Skipping %s (%d cards) — already has history",
+                        i + 1, total_sets, set_name, num_cards)
             continue
 
-        # Ensure card is in SQLite
-        card_id = _ensure_card_in_db(name, set_name, number, image_url)
+        logger.info("[%d/%d] Fetching %s (%d cards) — %d credits left",
+                    i + 1, total_sets, set_name, num_cards, credits)
 
-        logger.info("[%d/%d] %s (%s #%s) — $%.2f — %d credits left",
-                    i + 1, total_cards, name, set_name, number,
-                    row.get("price_market", 0) or 0, credits)
+        # Fetch all cards in this set with history
+        data = get_all_cards_in_set(set_id or set_name,
+                                     include_history=True, days=days)
+        if not data:
+            logger.warning("  No data returned for set %s", set_name)
+            continue
 
-        stored = fetch_and_store_history(card_id, name, set_name, days=days)
-        total_stored += stored
-        processed += 1
+        api_cards = _extract_cards_list(data)
+        if not api_cards:
+            logger.warning("  Empty card list for set %s", set_name)
+            continue
+
+        logger.info("  API returned %d cards for set %s", len(api_cards), set_name)
+
+        # Build lookup of API cards by name+number for matching
+        api_lookup = {}
+        for ac in api_cards:
+            if not isinstance(ac, dict):
+                continue
+            aname = ac.get("name", "")
+            anum = str(ac.get("number", ac.get("cardNumber", "")))
+            api_lookup[(aname, anum)] = ac
+
+        # Match and store for each card we want from this set
+        set_stored = 0
+        for card_info in set_info["cards"]:
+            # Try to find matching API card
+            api_card = api_lookup.get((card_info["name"], card_info["number"]))
+
+            if not api_card:
+                # Try looser match by name only
+                for (aname, _), ac in api_lookup.items():
+                    if aname == card_info["name"]:
+                        api_card = ac
+                        break
+
+            if not api_card:
+                continue
+
+            card_id = _ensure_card_in_db(
+                card_info["name"], card_info["set_name"],
+                card_info["number"], card_info["image_url"],
+            )
+
+            prices = _extract_prices(api_card)
+
+            # Store current prices
+            if "raw_price" in prices:
+                from api_clients.pokemon_price_tracker import store_raw_price
+                store_raw_price(card_id, prices["raw_price"])
+
+            if "psa10_price" in prices:
+                from api_clients.pokemon_price_tracker import store_psa10_price
+                store_psa10_price(card_id, prices["psa10_price"])
+
+            # Store history
+            history = prices.get("history", [])
+            if history:
+                stored = _store_history_batch(card_id, history)
+                set_stored += stored
+
+            cards_processed += 1
+
+        total_stored += set_stored
+        sets_processed += 1
+        logger.info("  Stored %d price points for %s", set_stored, set_name)
 
     logger.info("=" * 60)
     logger.info("Backfill complete:")
-    logger.info("  Cards processed: %d", processed)
-    logger.info("  Cards skipped (already had history): %d", skipped)
+    logger.info("  Sets processed: %d / %d", sets_processed, total_sets)
+    logger.info("  Cards processed: %d / %d", cards_processed, total_cards)
     logger.info("  Total price points stored: %d", total_stored)
     logger.info("  Credits remaining: %d", get_credits_remaining())
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Backfill historical prices from PokemonPriceTracker for all cards in catalog")
+        description="Backfill historical prices from PokemonPriceTracker (fetches by set)")
     parser.add_argument("--days", type=int, default=180,
                         help="Days of history to fetch (default: 180)")
     parser.add_argument("--source", type=str, default="watchlist", choices=["watchlist", "catalog"],
@@ -171,7 +300,7 @@ def main():
     parser.add_argument("--min-price", type=float, default=5.0,
                         help="Minimum market price to include (default: $5)")
     parser.add_argument("--resume", action="store_true",
-                        help="Skip cards that already have history in the database")
+                        help="Skip sets that already have history in the database")
     args = parser.parse_args()
     backfill(days=args.days, source=args.source,
              min_price=args.min_price, resume=args.resume)
