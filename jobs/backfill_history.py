@@ -20,12 +20,19 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import time
+
 import pandas as pd
 
 from db import get_connection, init_db
 from api_clients.pokemon_price_tracker import (
     get_all_cards_in_set, get_credits_remaining, _extract_cards_list, _extract_prices,
+    fetch_and_store_history, search_card, store_raw_price, store_psa10_price,
 )
+
+# Delay between API calls to avoid 429s.
+# fetchAllInSet counts credits per card returned, not per call.
+DELAY_BETWEEN_CALLS = 3  # seconds
 
 logging.basicConfig(
     level=logging.INFO,
@@ -215,68 +222,72 @@ def backfill(days: int = 180, source: str = "watchlist",
         logger.info("[%d/%d] Fetching %s (%d cards) — %d credits left",
                     i + 1, total_sets, set_name, num_cards, credits)
 
-        # Fetch all cards in this set with history
+        # Try set-based fetch first
+        time.sleep(DELAY_BETWEEN_CALLS)
         data = get_all_cards_in_set(set_id or set_name,
                                      include_history=True, days=days)
-        if not data:
-            logger.warning("  No data returned for set %s", set_name)
-            continue
 
-        api_cards = _extract_cards_list(data)
-        if not api_cards:
-            logger.warning("  Empty card list for set %s", set_name)
-            continue
+        api_cards = _extract_cards_list(data) if data else []
+        # Filter out non-dict items
+        api_cards = [ac for ac in api_cards if isinstance(ac, dict)]
 
-        logger.info("  API returned %d cards for set %s", len(api_cards), set_name)
-
-        # Build lookup of API cards by name+number for matching
-        api_lookup = {}
-        for ac in api_cards:
-            if not isinstance(ac, dict):
-                continue
-            aname = ac.get("name", "")
-            anum = str(ac.get("number", ac.get("cardNumber", "")))
-            api_lookup[(aname, anum)] = ac
-
-        # Match and store for each card we want from this set
         set_stored = 0
-        for card_info in set_info["cards"]:
-            # Try to find matching API card
-            api_card = api_lookup.get((card_info["name"], card_info["number"]))
 
-            if not api_card:
-                # Try looser match by name only
-                for (aname, _), ac in api_lookup.items():
-                    if aname == card_info["name"]:
-                        api_card = ac
-                        break
+        if api_cards:
+            # Set fetch worked — match and store
+            logger.info("  API returned %d cards for set %s", len(api_cards), set_name)
 
-            if not api_card:
-                continue
+            api_lookup = {}
+            for ac in api_cards:
+                aname = ac.get("name", "")
+                anum = str(ac.get("number", ac.get("cardNumber", "")))
+                api_lookup[(aname, anum)] = ac
 
-            card_id = _ensure_card_in_db(
-                card_info["name"], card_info["set_name"],
-                card_info["number"], card_info["image_url"],
-            )
+            for card_info in set_info["cards"]:
+                api_card = api_lookup.get((card_info["name"], card_info["number"]))
+                if not api_card:
+                    for (aname, _), ac in api_lookup.items():
+                        if aname == card_info["name"]:
+                            api_card = ac
+                            break
 
-            prices = _extract_prices(api_card)
+                if not api_card:
+                    continue
 
-            # Store current prices
-            if "raw_price" in prices:
-                from api_clients.pokemon_price_tracker import store_raw_price
-                store_raw_price(card_id, prices["raw_price"])
+                card_id = _ensure_card_in_db(
+                    card_info["name"], card_info["set_name"],
+                    card_info["number"], card_info["image_url"],
+                )
 
-            if "psa10_price" in prices:
-                from api_clients.pokemon_price_tracker import store_psa10_price
-                store_psa10_price(card_id, prices["psa10_price"])
+                prices = _extract_prices(api_card)
+                if "raw_price" in prices:
+                    store_raw_price(card_id, prices["raw_price"])
+                if "psa10_price" in prices:
+                    store_psa10_price(card_id, prices["psa10_price"])
 
-            # Store history
-            history = prices.get("history", [])
-            if history:
-                stored = _store_history_batch(card_id, history)
+                history = prices.get("history", [])
+                if history:
+                    stored = _store_history_batch(card_id, history)
+                    set_stored += stored
+
+                cards_processed += 1
+        else:
+            # Set fetch returned empty — fall back to per-card search
+            logger.info("  Set fetch empty, falling back to per-card for %s", set_name)
+            for card_info in set_info["cards"]:
+                if get_credits_remaining() < 100:
+                    break
+
+                card_id = _ensure_card_in_db(
+                    card_info["name"], card_info["set_name"],
+                    card_info["number"], card_info["image_url"],
+                )
+
+                time.sleep(DELAY_BETWEEN_CALLS)
+                stored = fetch_and_store_history(
+                    card_id, card_info["name"], card_info["set_name"], days=days)
                 set_stored += stored
-
-            cards_processed += 1
+                cards_processed += 1
 
         total_stored += set_stored
         sets_processed += 1
