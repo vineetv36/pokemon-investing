@@ -47,13 +47,8 @@ def _get_headers() -> dict:
 
 
 def _rate_limit():
-    """Enforce minimum 2 seconds between every request (30 req/min max)."""
-    global _last_request_time
-    now = time.time()
-    elapsed = now - _last_request_time
-    if elapsed < 2.0:
-        time.sleep(2.0 - elapsed)
-    _last_request_time = time.time()
+    """No delay — fire as fast as possible."""
+    pass
 
 
 def _make_request(endpoint: str, params: Optional[dict] = None,
@@ -76,16 +71,10 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
                              timeout=30, verify=_ssl_ctx)
 
         if response.status_code == 429:
-            for backoff in [60, 120, 240]:
-                logger.warning("Rate limited (429). Backing off %ds...", backoff)
-                time.sleep(backoff)
-                response = httpx.get(url, headers=_get_headers(), params=params,
-                                     timeout=30, verify=_ssl_ctx)
-                if response.status_code != 429:
-                    break
-            if response.status_code == 429:
-                logger.error("Still rate limited after backoff. Giving up.")
-                return None
+            # Just wait 2s and retry once, don't back off forever
+            time.sleep(2)
+            response = httpx.get(url, headers=_get_headers(), params=params,
+                                 timeout=30, verify=_ssl_ctx)
 
         if response.status_code == 401:
             logger.error("API key invalid (401). Check POKEMON_PRICE_TRACKER_API_KEY.")
