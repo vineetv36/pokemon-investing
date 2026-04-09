@@ -41,6 +41,21 @@ logger = logging.getLogger(__name__)
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 WATCHLIST_FILE = os.path.join(DATA_DIR, "watchlist.parquet")
 CATALOG_FILE = os.path.join(DATA_DIR, "cards_catalog.parquet")
+FAILED_SETS_FILE = os.path.join(DATA_DIR, "failed_sets.txt")
+
+
+def _load_failed_sets() -> set:
+    """Load set names that previously failed bulk fetch."""
+    if not os.path.exists(FAILED_SETS_FILE):
+        return set()
+    with open(FAILED_SETS_FILE, "r") as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+def _save_failed_set(set_name: str):
+    """Append a failed set name to the tracking file."""
+    with open(FAILED_SETS_FILE, "a") as f:
+        f.write(set_name + "\n")
 
 
 def _load_cards(source: str, min_price: float) -> pd.DataFrame:
@@ -250,11 +265,14 @@ def backfill(days: int = 180, source: str = "watchlist",
                          key=lambda x: sum(c["price_market"] for c in x[1]["cards"]),
                          reverse=True)
 
-    # Skip completed sets if resuming
+    # Skip completed and previously failed sets if resuming
     skip_sets = set()
+    failed_sets = set()
     if resume:
         skip_sets = _get_completed_sets()
-        logger.info("Resume mode: skipping %d sets that already have history", len(skip_sets))
+        failed_sets = _load_failed_sets()
+        logger.info("Resume mode: skipping %d sets with history, %d previously failed",
+                    len(skip_sets), len(failed_sets))
 
     total_sets = len(sorted_sets)
     total_cards = sum(len(s["cards"]) for _, s in sorted_sets)
@@ -281,6 +299,12 @@ def backfill(days: int = 180, source: str = "watchlist",
         if resume and set_name in skip_sets:
             cards_processed += num_cards
             logger.info("[%d/%d] Skipping %s (%d cards) — already has history",
+                        i + 1, total_sets, set_name, num_cards)
+            continue
+
+        if resume and set_name in failed_sets:
+            cards_processed += num_cards
+            logger.info("[%d/%d] Skipping %s (%d cards) — previously failed",
                         i + 1, total_sets, set_name, num_cards)
             continue
 
@@ -364,6 +388,7 @@ def backfill(days: int = 180, source: str = "watchlist",
         # Skip set entirely if bulk fetch failed — don't waste credits on per-card
         if not bulk_success:
             logger.warning("  Skipping '%s' — bulk fetch failed, moving to next set", set_name)
+            _save_failed_set(set_name)
             cards_processed += num_cards
 
         total_stored += set_stored
