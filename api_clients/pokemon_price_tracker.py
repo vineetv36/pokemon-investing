@@ -55,12 +55,12 @@ def _get_headers() -> dict:
 
 
 def _rate_limit():
-    """Enforce minimum 2 seconds between every request (30 req/min max)."""
+    """Enforce minimum 3 seconds between every request (20 req/min max)."""
     global _last_request_time
     now = time.time()
     elapsed = now - _last_request_time
-    if elapsed < 2.0:
-        time.sleep(2.0 - elapsed)
+    if elapsed < 3.0:
+        time.sleep(3.0 - elapsed)
     _last_request_time = time.time()
 
 
@@ -82,45 +82,51 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
     try:
         response = httpx.get(url, headers=_get_headers(), params=params,
                              timeout=30, verify=_ssl_ctx)
-
-        if response.status_code == 429:
-            for backoff in [60, 120, 240]:
-                logger.warning("Rate limited (429). Backing off %ds...", backoff)
-                time.sleep(backoff)
-                response = httpx.get(url, headers=_get_headers(), params=params,
-                                     timeout=30, verify=_ssl_ctx)
-                if response.status_code != 429:
-                    break
-            if response.status_code == 429:
-                logger.error("Still rate limited after backoff. Giving up.")
-                return None
-
-        if response.status_code == 401:
-            logger.error("API key invalid (401). Check POKEMON_PRICE_TRACKER_API_KEY.")
-            return None
-
-        if response.status_code == 404:
-            logger.warning("404 for %s — card not found", url)
-            return None
-
-        response.raise_for_status()
-        _credits_used += credits
-
-        # Parse response — guard against HTML responses
-        content_type = response.headers.get("content-type", "")
-        if "application/json" not in content_type and "text/json" not in content_type:
-            logger.error("Non-JSON response (content-type: %s): %s",
-                         content_type, response.text[:200])
-            return None
-
-        return response.json()
-
-    except httpx.HTTPStatusError as e:
-        logger.error("HTTP error: %d %s", e.response.status_code, e.response.text[:200])
-        return None
     except httpx.RequestError as e:
         logger.error("Request error: %s", e)
         return None
+
+    if response.status_code == 429:
+        for backoff in [60, 120, 240]:
+            logger.warning("Rate limited (429). Backing off %ds...", backoff)
+            time.sleep(backoff)
+            _last_request_time = time.time()
+            try:
+                response = httpx.get(url, headers=_get_headers(), params=params,
+                                     timeout=30, verify=_ssl_ctx)
+            except httpx.RequestError as e:
+                logger.error("Request error during retry: %s", e)
+                return None
+            if response.status_code != 429:
+                break
+        if response.status_code == 429:
+            logger.error("Still rate limited after backoff. Giving up.")
+            return None
+
+    if response.status_code == 401:
+        logger.error("API key invalid (401). Check POKEMON_PRICE_TRACKER_API_KEY.")
+        return None
+
+    if response.status_code == 404:
+        logger.warning("404 for %s — card not found", url)
+        return None
+
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        logger.error("HTTP error: %d %s", e.response.status_code, e.response.text[:200])
+        return None
+
+    _credits_used += credits
+
+    # Parse response — guard against HTML responses
+    content_type = response.headers.get("content-type", "")
+    if "application/json" not in content_type and "text/json" not in content_type:
+        logger.error("Non-JSON response (content-type: %s): %s",
+                     content_type, response.text[:200])
+        return None
+
+    return response.json()
 
 
 # --- Card Lookup ---
