@@ -148,6 +148,70 @@ def _store_history_batch(card_id: int, history: list):
     return stored
 
 
+def _build_api_set_map() -> dict:
+    """Fetch set names from PokemonPriceTracker API and build a lookup.
+
+    Returns dict mapping lowercase set name -> API's exact set name.
+    """
+    from api_clients.pokemon_price_tracker import get_sets
+    api_set_map = {}
+    data = get_sets()
+    if not data:
+        logger.warning("Could not fetch sets from API — will use raw set names")
+        return api_set_map
+
+    # Handle both list and dict-with-data formats
+    sets_list = data if isinstance(data, list) else data.get("data", data.get("sets", []))
+    if isinstance(sets_list, dict):
+        sets_list = list(sets_list.values()) if sets_list else []
+
+    for s in sets_list:
+        if isinstance(s, dict):
+            name = s.get("name", "") or s.get("setName", "")
+            if name:
+                api_set_map[name.lower().strip()] = name
+        elif isinstance(s, str):
+            api_set_map[s.lower().strip()] = s
+
+    logger.info("Loaded %d set names from API", len(api_set_map))
+    return api_set_map
+
+
+def _resolve_set_name(our_name: str, api_set_map: dict) -> str:
+    """Find the best API set name for our pokemontcg.io set name.
+
+    Tries: exact match, then partial/substring match, then shortened variants.
+    """
+    lower = our_name.lower().strip()
+
+    # Exact match
+    if lower in api_set_map:
+        return api_set_map[lower]
+
+    # Substring match: find API sets that contain our name or vice versa
+    for api_lower, api_name in api_set_map.items():
+        if lower in api_lower or api_lower in lower:
+            return api_name
+
+    # Return original — the API does partial matching so it may still work
+    return our_name
+
+
+def _get_set_name_variants(set_name: str) -> list:
+    """Generate alternative set name strings to try if the primary fails.
+
+    E.g., "Expedition Base Set" -> ["Expedition Base", "Expedition"]
+    """
+    variants = []
+    words = set_name.split()
+    # Drop trailing words one at a time (e.g., "Expedition Base Set" -> "Expedition Base" -> "Expedition")
+    for i in range(len(words) - 1, 0, -1):
+        variant = " ".join(words[:i])
+        if len(variant) >= 3:
+            variants.append(variant)
+    return variants
+
+
 def backfill(days: int = 180, source: str = "watchlist",
              min_price: float = 5.0, resume: bool = False):
     """Backfill historical prices by fetching entire sets at once."""
@@ -158,8 +222,10 @@ def backfill(days: int = 180, source: str = "watchlist",
         logger.error("No cards to process.")
         return
 
+    # Fetch API set names for better matching
+    api_set_map = _build_api_set_map()
+
     # Build a lookup of cards we want per set
-    # set_id -> list of (name, set_name, number, image_url, price_market)
     sets = {}
     for _, row in df.iterrows():
         set_id = row.get("set_id", "")
@@ -168,7 +234,9 @@ def backfill(days: int = 180, source: str = "watchlist",
             continue
         key = set_id or set_name
         if key not in sets:
-            sets[key] = {"set_name": set_name, "set_id": set_id, "cards": []}
+            # Resolve the set name to what the API expects
+            api_name = _resolve_set_name(set_name, api_set_map) if api_set_map else set_name
+            sets[key] = {"set_name": set_name, "api_name": api_name, "set_id": set_id, "cards": []}
         sets[key]["cards"].append({
             "name": row["name"],
             "set_name": set_name,
@@ -216,68 +284,87 @@ def backfill(days: int = 180, source: str = "watchlist",
                         i + 1, total_sets, set_name, num_cards)
             continue
 
-        logger.info("[%d/%d] Fetching set '%s' (%d cards) — %d credits left",
-                    i + 1, total_sets, set_name, num_cards, credits)
+        api_name = set_info.get("api_name", set_name)
+        logger.info("[%d/%d] Fetching set '%s' (api: '%s', %d cards) — %d credits left",
+                    i + 1, total_sets, set_name, api_name, num_cards, credits)
 
-        # Try set-based bulk fetch first (1 API call for all cards in set)
+        # Try set-based bulk fetch: first with resolved API name, then with name variants
         set_stored = 0
         bulk_success = False
+        bulk_cards = []
 
-        bulk_data = get_all_cards_in_set(
-            set_name, include_history=True, days=days, include_ebay=True)
+        # Try the resolved API name first
+        names_to_try = [api_name]
+        if api_name != set_name:
+            names_to_try.append(set_name)
+        # Add shortened variants as fallbacks
+        names_to_try.extend(_get_set_name_variants(set_name))
+        # Deduplicate while preserving order
+        seen = set()
+        unique_names = []
+        for n in names_to_try:
+            if n.lower() not in seen:
+                seen.add(n.lower())
+                unique_names.append(n)
 
-        if bulk_data:
-            bulk_cards = _extract_cards_list(bulk_data)
-            if bulk_cards:
-                bulk_success = True
-                logger.info("  Bulk fetch returned %d cards for '%s'",
-                            len(bulk_cards), set_name)
+        for try_name in unique_names:
+            bulk_data = get_all_cards_in_set(
+                try_name, include_history=True, days=days, include_ebay=True)
+            if bulk_data:
+                bulk_cards = _extract_cards_list(bulk_data)
+                if bulk_cards:
+                    logger.info("  Bulk fetch returned %d cards for '%s' (tried: '%s')",
+                                len(bulk_cards), set_name, try_name)
+                    bulk_success = True
+                    break
+            logger.info("  Bulk fetch empty with name '%s', trying next variant...", try_name)
 
-                # Build lookup by card name+number for matching
-                wanted = {}
-                for card_info in set_info["cards"]:
-                    key = (card_info["name"].lower(), card_info["number"])
-                    wanted[key] = card_info
+        if bulk_success:
+            # Build lookup by card name+number for matching
+            wanted = {}
+            for card_info in set_info["cards"]:
+                key = (card_info["name"].lower(), card_info["number"])
+                wanted[key] = card_info
 
-                for api_card in bulk_cards:
-                    api_name = (api_card.get("name", "") or "").lower()
-                    api_number = api_card.get("number", "") or api_card.get("cardNumber", "")
-                    match_key = (api_name, api_number)
+            for api_card in bulk_cards:
+                card_api_name = (api_card.get("name", "") or "").lower()
+                api_number = api_card.get("number", "") or api_card.get("cardNumber", "")
+                match_key = (card_api_name, api_number)
 
-                    card_info = wanted.get(match_key)
-                    if not card_info:
-                        # Try matching by name only
-                        for k, v in wanted.items():
-                            if k[0] == api_name:
-                                card_info = v
-                                break
+                card_info = wanted.get(match_key)
+                if not card_info:
+                    # Try matching by name only
+                    for k, v in wanted.items():
+                        if k[0] == card_api_name:
+                            card_info = v
+                            break
 
-                    if not card_info:
-                        continue
+                if not card_info:
+                    continue
 
-                    card_id = _ensure_card_in_db(
-                        card_info["name"], card_info["set_name"],
-                        card_info["number"], card_info["image_url"],
-                    )
+                card_id = _ensure_card_in_db(
+                    card_info["name"], card_info["set_name"],
+                    card_info["number"], card_info["image_url"],
+                )
 
-                    prices = _extract_prices(api_card)
+                prices = _extract_prices(api_card)
 
-                    if "raw_price" in prices:
-                        store_raw_price(card_id, prices["raw_price"])
-                    if "psa10_price" in prices:
-                        store_psa10_price(card_id, prices["psa10_price"])
+                if "raw_price" in prices:
+                    store_raw_price(card_id, prices["raw_price"])
+                if "psa10_price" in prices:
+                    store_psa10_price(card_id, prices["psa10_price"])
 
-                    history = prices.get("history", [])
-                    if history:
-                        stored = _store_history_batch(card_id, history)
-                        set_stored += stored
+                history = prices.get("history", [])
+                if history:
+                    stored = _store_history_batch(card_id, history)
+                    set_stored += stored
 
-                    cards_processed += 1
+                cards_processed += 1
 
-        # Fallback: per-card fetch if bulk returned nothing
+        # Fallback: per-card fetch if ALL name variants returned nothing
         if not bulk_success:
-            logger.info("  Bulk fetch empty for '%s', falling back to per-card",
-                        set_name)
+            logger.warning("  All bulk attempts failed for '%s' — falling back to per-card (%d cards)",
+                           set_name, num_cards)
             for card_info in set_info["cards"]:
                 if get_credits_remaining() < 100:
                     break
