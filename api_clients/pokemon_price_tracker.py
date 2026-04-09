@@ -55,6 +55,7 @@ def _get_headers() -> dict:
 
 
 _min_delay = 3.0  # seconds between requests, increases on 429
+_consecutive_429s = 0
 
 
 def _rate_limit():
@@ -74,7 +75,7 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
     On 429: returns None immediately and doubles the delay for future requests.
     No retry loop — caller should skip and move on.
     """
-    global _credits_used, _min_delay
+    global _credits_used, _min_delay, _consecutive_429s
 
     if _credits_used + credits > DAILY_CREDIT_LIMIT:
         logger.warning("Daily credit limit approaching (%d/%d). Stopping.",
@@ -94,13 +95,21 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
         return None
 
     if response.status_code == 429:
-        # Don't retry — just slow down and let the caller skip this one
-        old_delay = _min_delay
-        _min_delay = min(_min_delay * 2, 30.0)  # double delay, cap at 30s
-        retry_after = response.headers.get("Retry-After")
-        wait = int(retry_after) if retry_after else 15
-        logger.warning("Rate limited (429). Waiting %ds, increasing delay %.0fs -> %.0fs",
-                       wait, old_delay, _min_delay)
+        _consecutive_429s += 1
+
+        # After 3 consecutive 429s, the rate limit window hasn't reset — long pause
+        if _consecutive_429s >= 3:
+            wait = 120
+            logger.warning("429 x%d in a row. Pausing %ds to let rate limit window reset...",
+                           _consecutive_429s, wait)
+        else:
+            retry_after = response.headers.get("Retry-After")
+            wait = int(retry_after) if retry_after else 30
+            old_delay = _min_delay
+            _min_delay = min(_min_delay * 2, 30.0)
+            logger.warning("Rate limited (429). Waiting %ds, delay now %.0fs",
+                           wait, _min_delay)
+
         time.sleep(wait)
         _last_request_time = time.time()
         return None
@@ -120,6 +129,7 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
         return None
 
     _credits_used += credits
+    _consecutive_429s = 0
 
     # Success — gradually reduce delay back toward 3s
     if _min_delay > 3.0:
