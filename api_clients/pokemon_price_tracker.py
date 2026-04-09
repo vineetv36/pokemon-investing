@@ -97,18 +97,22 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
     if response.status_code == 429:
         _consecutive_429s += 1
 
-        # After 3 consecutive 429s, the rate limit window hasn't reset — long pause
+        # Log all rate limit headers so we can see what the API is telling us
+        remaining = response.headers.get("X-RateLimit-Daily-Remaining", "?")
+        consumed = response.headers.get("X-API-Calls-Consumed", "?")
+        retry_after = response.headers.get("Retry-After")
+        logger.warning("429 headers — Remaining: %s, Consumed: %s, Retry-After: %s",
+                       remaining, consumed, retry_after)
+
+        # After 3 consecutive 429s, long pause to let window fully reset
         if _consecutive_429s >= 3:
             wait = 120
-            logger.warning("429 x%d in a row. Pausing %ds to let rate limit window reset...",
-                           _consecutive_429s, wait)
+            logger.warning("429 x%d in a row. Pausing %ds...", _consecutive_429s, wait)
         else:
-            retry_after = response.headers.get("Retry-After")
             wait = int(retry_after) if retry_after else 30
             old_delay = _min_delay
             _min_delay = min(_min_delay * 2, 30.0)
-            logger.warning("Rate limited (429). Waiting %ds, delay now %.0fs",
-                           wait, _min_delay)
+            logger.warning("Waiting %ds, delay now %.0fs", wait, _min_delay)
 
         time.sleep(wait)
         _last_request_time = time.time()
@@ -128,8 +132,22 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
         logger.error("HTTP error: %d %s", e.response.status_code, e.response.text[:200])
         return None
 
-    _credits_used += credits
     _consecutive_429s = 0
+
+    # Read actual credit consumption from response headers
+    consumed = response.headers.get("X-API-Calls-Consumed")
+    remaining = response.headers.get("X-RateLimit-Daily-Remaining")
+    breakdown = response.headers.get("X-API-Calls-Breakdown", "")
+
+    if remaining is not None:
+        _credits_used = DAILY_CREDIT_LIMIT - int(remaining)
+    elif consumed is not None:
+        _credits_used += int(consumed)
+    else:
+        _credits_used += credits
+
+    logger.info("Credits consumed: %s | Breakdown: %s | Remaining: %s",
+                consumed or "?", breakdown or "?", remaining or "?")
 
     # Success — gradually reduce delay back toward 3s
     if _min_delay > 3.0:
