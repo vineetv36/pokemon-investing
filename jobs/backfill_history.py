@@ -298,12 +298,12 @@ def backfill(days: int = 180, source: str = "watchlist",
         logger.info("[%d/%d] Fetching set '%s' (%d cards) — %d credits left",
                     i + 1, total_sets, api_name, num_cards, credits)
 
-        # One attempt per set — skip if it fails
+        # One attempt per set — history only (no eBay, keeps limit at 100 cards/response)
         set_stored = 0
         bulk_success = False
 
         bulk_data = get_all_cards_in_set(
-            api_name, include_history=True, days=days, include_ebay=True)
+            api_name, include_history=True, days=days, include_ebay=False)
         if bulk_data:
             bulk_cards = _extract_cards_list(bulk_data)
             if bulk_cards:
@@ -352,10 +352,15 @@ def backfill(days: int = 180, source: str = "watchlist",
 
                 cards_processed += 1
 
-        # Skip set entirely if bulk fetch failed — don't waste credits on per-card
+        # Skip set if bulk fetch failed
         if not bulk_success:
-            logger.warning("  Skipping '%s' — bulk fetch failed, moving to next set", set_name)
-            _save_failed_set(set_name)
+            if bulk_data is None:
+                # API returned None (likely 429) — don't mark as permanently failed
+                logger.warning("  Skipping '%s' — API error, will retry next run", set_name)
+            else:
+                # Got a response but no cards — set name doesn't match
+                logger.warning("  Skipping '%s' — no cards found, saving as failed", set_name)
+                _save_failed_set(set_name)
             cards_processed += num_cards
 
         total_stored += set_stored

@@ -54,20 +54,27 @@ def _get_headers() -> dict:
     }
 
 
+_min_delay = 3.0  # seconds between requests, increases on 429
+
+
 def _rate_limit():
-    """Enforce minimum 3 seconds between every request (20 req/min max)."""
+    """Enforce minimum delay between requests."""
     global _last_request_time
     now = time.time()
     elapsed = now - _last_request_time
-    if elapsed < 3.0:
-        time.sleep(3.0 - elapsed)
+    if elapsed < _min_delay:
+        time.sleep(_min_delay - elapsed)
     _last_request_time = time.time()
 
 
 def _make_request(endpoint: str, params: Optional[dict] = None,
                   credits: int = 1) -> Optional[dict]:
-    """Make an authenticated GET request with rate limiting and retries."""
-    global _credits_used
+    """Make an authenticated GET request with rate limiting.
+
+    On 429: returns None immediately and doubles the delay for future requests.
+    No retry loop — caller should skip and move on.
+    """
+    global _credits_used, _min_delay
 
     if _credits_used + credits > DAILY_CREDIT_LIMIT:
         logger.warning("Daily credit limit approaching (%d/%d). Stopping.",
@@ -87,21 +94,16 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
         return None
 
     if response.status_code == 429:
-        for backoff in [60, 120, 240]:
-            logger.warning("Rate limited (429). Backing off %ds...", backoff)
-            time.sleep(backoff)
-            _last_request_time = time.time()
-            try:
-                response = httpx.get(url, headers=_get_headers(), params=params,
-                                     timeout=30, verify=_ssl_ctx)
-            except httpx.RequestError as e:
-                logger.error("Request error during retry: %s", e)
-                return None
-            if response.status_code != 429:
-                break
-        if response.status_code == 429:
-            logger.error("Still rate limited after backoff. Giving up.")
-            return None
+        # Don't retry — just slow down and let the caller skip this one
+        old_delay = _min_delay
+        _min_delay = min(_min_delay * 2, 30.0)  # double delay, cap at 30s
+        retry_after = response.headers.get("Retry-After")
+        wait = int(retry_after) if retry_after else 15
+        logger.warning("Rate limited (429). Waiting %ds, increasing delay %.0fs -> %.0fs",
+                       wait, old_delay, _min_delay)
+        time.sleep(wait)
+        _last_request_time = time.time()
+        return None
 
     if response.status_code == 401:
         logger.error("API key invalid (401). Check POKEMON_PRICE_TRACKER_API_KEY.")
@@ -118,6 +120,10 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
         return None
 
     _credits_used += credits
+
+    # Success — gradually reduce delay back toward 3s
+    if _min_delay > 3.0:
+        _min_delay = max(3.0, _min_delay * 0.8)
 
     # Parse response — guard against HTML responses
     content_type = response.headers.get("content-type", "")
