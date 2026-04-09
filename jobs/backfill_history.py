@@ -212,6 +212,20 @@ def _resolve_set_name(our_name: str, api_set_map: dict) -> str:
     return our_name
 
 
+def _get_set_name_variants(set_name: str) -> list:
+    """Generate alternative set name strings to try if the primary fails.
+
+    E.g., "Expedition Base Set" -> ["Expedition Base", "Expedition"]
+    """
+    variants = []
+    words = set_name.split()
+    # Drop trailing words one at a time (e.g., "Expedition Base Set" -> "Expedition Base" -> "Expedition")
+    for i in range(len(words) - 1, 0, -1):
+        variant = " ".join(words[:i])
+        if len(variant) >= 3:
+            variants.append(variant)
+    return variants
+
 
 def backfill(days: int = 180, source: str = "watchlist",
              min_price: float = 5.0, resume: bool = False):
@@ -298,19 +312,36 @@ def backfill(days: int = 180, source: str = "watchlist",
         logger.info("[%d/%d] Fetching set '%s' (api: '%s', %d cards) — %d credits left",
                     i + 1, total_sets, set_name, api_name, num_cards, credits)
 
-        # Try bulk fetch with exact set name only (no variants — avoids matching wrong sets)
+        # Try set-based bulk fetch: first with resolved API name, then with name variants
         set_stored = 0
         bulk_success = False
         bulk_cards = []
 
-        bulk_data = get_all_cards_in_set(
-            api_name, include_history=True, days=days, include_ebay=True)
-        if bulk_data:
-            bulk_cards = _extract_cards_list(bulk_data)
-            if bulk_cards:
-                logger.info("  Bulk fetch returned %d cards for '%s'",
-                            len(bulk_cards), set_name)
-                bulk_success = True
+        # Try the resolved API name first
+        names_to_try = [api_name]
+        if api_name != set_name:
+            names_to_try.append(set_name)
+        # Add shortened variants as fallbacks
+        names_to_try.extend(_get_set_name_variants(set_name))
+        # Deduplicate while preserving order
+        seen = set()
+        unique_names = []
+        for n in names_to_try:
+            if n.lower() not in seen:
+                seen.add(n.lower())
+                unique_names.append(n)
+
+        for try_name in unique_names:
+            bulk_data = get_all_cards_in_set(
+                try_name, include_history=True, days=days, include_ebay=True)
+            if bulk_data:
+                bulk_cards = _extract_cards_list(bulk_data)
+                if bulk_cards:
+                    logger.info("  Bulk fetch returned %d cards for '%s' (tried: '%s')",
+                                len(bulk_cards), set_name, try_name)
+                    bulk_success = True
+                    break
+            logger.info("  Bulk fetch empty with name '%s', trying next variant...", try_name)
 
         if bulk_success:
             # Build lookup by card name+number for matching
