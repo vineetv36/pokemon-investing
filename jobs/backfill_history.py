@@ -361,23 +361,10 @@ def backfill(days: int = 180, source: str = "watchlist",
 
                 cards_processed += 1
 
-        # Fallback: per-card fetch if ALL name variants returned nothing
+        # Skip set entirely if bulk fetch failed — don't waste credits on per-card
         if not bulk_success:
-            logger.warning("  All bulk attempts failed for '%s' — falling back to per-card (%d cards)",
-                           set_name, num_cards)
-            for card_info in set_info["cards"]:
-                if get_credits_remaining() < 100:
-                    break
-
-                card_id = _ensure_card_in_db(
-                    card_info["name"], card_info["set_name"],
-                    card_info["number"], card_info["image_url"],
-                )
-
-                stored = fetch_and_store_history(
-                    card_id, card_info["name"], card_info["set_name"], days=days)
-                set_stored += stored
-                cards_processed += 1
+            logger.warning("  Skipping '%s' — bulk fetch failed, moving to next set", set_name)
+            cards_processed += num_cards
 
         total_stored += set_stored
         sets_processed += 1
