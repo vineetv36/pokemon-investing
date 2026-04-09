@@ -17,11 +17,13 @@ Credit costs: cards_returned × (1 + includeHistory + includeEbay)
 Paid tier: ~20,000 credits/day, 60 req/min, 6 months history.
 """
 
+import json
 import logging
 import os
 import ssl
 import time
 from datetime import date
+from hashlib import md5
 from typing import Optional
 
 import httpx
@@ -34,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.pokemonpricetracker.com/api/v2"
 API_KEY = os.getenv("POKEMON_PRICE_TRACKER_API_KEY", "")
+
+# Response cache directory — every API response saved here
+CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "api_cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 # Paid tier limits
 DAILY_CREDIT_LIMIT = 20000
@@ -160,7 +166,68 @@ def _make_request(endpoint: str, params: Optional[dict] = None,
                      content_type, response.text[:200])
         return None
 
-    return response.json()
+    data = response.json()
+
+    # Cache EVERY successful response to disk immediately
+    _cache_response(endpoint, params, data)
+
+    return data
+
+
+def _cache_key(endpoint: str, params: Optional[dict]) -> str:
+    """Generate a cache filename from endpoint + params."""
+    key_str = endpoint + "|" + json.dumps(params or {}, sort_keys=True)
+    return md5(key_str.encode()).hexdigest()
+
+
+def _cache_response(endpoint: str, params: Optional[dict], data):
+    """Save API response to disk as JSON."""
+    try:
+        cache_file = os.path.join(CACHE_DIR, f"{_cache_key(endpoint, params)}_{date.today().isoformat()}.json")
+        with open(cache_file, "w") as f:
+            json.dump({
+                "endpoint": endpoint,
+                "params": params,
+                "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "response": data,
+            }, f)
+        logger.info("Cached response to %s", os.path.basename(cache_file))
+    except Exception as e:
+        logger.error("Failed to cache response: %s", e)
+
+
+def load_cached_response(endpoint: str, params: Optional[dict] = None,
+                          max_age_days: int = 7) -> Optional[dict]:
+    """Load a cached response if available and not too old.
+
+    Searches for any cache file matching the endpoint+params hash.
+    Returns the 'response' field from the cached JSON, or None.
+    """
+    prefix = _cache_key(endpoint, params)
+    today = date.today()
+
+    # Find matching cache files, newest first
+    matches = []
+    for f in os.listdir(CACHE_DIR):
+        if f.startswith(prefix) and f.endswith(".json"):
+            matches.append(f)
+    matches.sort(reverse=True)
+
+    for filename in matches:
+        # Extract date from filename: {hash}_{date}.json
+        try:
+            file_date_str = filename.split("_")[-1].replace(".json", "")
+            file_date = date.fromisoformat(file_date_str)
+            if (today - file_date).days <= max_age_days:
+                filepath = os.path.join(CACHE_DIR, filename)
+                with open(filepath) as f:
+                    cached = json.load(f)
+                logger.info("Using cached response from %s", filename)
+                return cached.get("response")
+        except (ValueError, json.JSONDecodeError):
+            continue
+
+    return None
 
 
 # --- Card Lookup ---

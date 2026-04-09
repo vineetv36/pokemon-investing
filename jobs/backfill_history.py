@@ -28,6 +28,7 @@ from db import get_connection, init_db
 from api_clients.pokemon_price_tracker import (
     get_all_cards_in_set, get_credits_remaining, _extract_cards_list, _extract_prices,
     fetch_and_store_history, search_card, store_raw_price, store_psa10_price,
+    load_cached_response,
 )
 
 # API client enforces 2s between requests. No extra delay needed here.
@@ -298,16 +299,23 @@ def backfill(days: int = 180, source: str = "watchlist",
         logger.info("[%d/%d] Fetching set '%s' (%d cards) — %d credits left",
                     i + 1, total_sets, api_name, num_cards, credits)
 
-        # One attempt per set — history only (no eBay, keeps limit at 100 cards/response)
         set_stored = 0
         bulk_success = False
 
-        bulk_data = get_all_cards_in_set(
-            api_name, include_history=True, days=days, include_ebay=False)
+        # Check cache first before hitting the API
+        cache_params = {"set": api_name, "fetchAllInSet": "true",
+                        "includeHistory": "true", "days": days}
+        bulk_data = load_cached_response("/cards", cache_params)
+        if bulk_data:
+            logger.info("  Loaded from cache for '%s'", api_name)
+        else:
+            bulk_data = get_all_cards_in_set(
+                api_name, include_history=True, days=days, include_ebay=False)
+
         if bulk_data:
             bulk_cards = _extract_cards_list(bulk_data)
             if bulk_cards:
-                logger.info("  Bulk fetch returned %d cards", len(bulk_cards))
+                logger.info("  Got %d cards for '%s'", len(bulk_cards), api_name)
                 bulk_success = True
 
         if bulk_success:

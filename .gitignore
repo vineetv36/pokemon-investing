@@ -12,3 +12,4 @@ data/*.parquet
 data/*.duckdb
 data/*.csv
 data/failed_sets.txt
+data/api_cache/
