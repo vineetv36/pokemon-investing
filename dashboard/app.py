@@ -144,6 +144,56 @@ def api_leaderboard():
     return {"leaderboard": results}
 
 
+@app.get("/api/movers")
+def api_movers():
+    """Get biggest price movers — raw, PSA 10, and ratio changes."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT c.id, c.name, c.set_name, c.card_number,
+            pr.psa10_price, pr.raw_price, pr.ratio,
+            pr.ratio_7d_change, pr.ratio_30d_change,
+
+            rp_now.price as raw_now,
+            rp_7d.price as raw_7d_ago,
+            rp_30d.price as raw_30d_ago,
+
+            p10_now.avg_price as psa10_now,
+            p10_7d.avg_price as psa10_7d_ago,
+            p10_30d.avg_price as psa10_30d_ago
+        FROM cards c
+        LEFT JOIN price_ratios pr ON c.id = pr.card_id
+            AND pr.recorded_date = (SELECT MAX(recorded_date) FROM price_ratios)
+        LEFT JOIN raw_prices rp_now ON c.id = rp_now.card_id
+            AND rp_now.recorded_date = (SELECT MAX(recorded_date) FROM raw_prices)
+        LEFT JOIN raw_prices rp_7d ON c.id = rp_7d.card_id
+            AND rp_7d.recorded_date = date((SELECT MAX(recorded_date) FROM raw_prices), '-7 days')
+        LEFT JOIN raw_prices rp_30d ON c.id = rp_30d.card_id
+            AND rp_30d.recorded_date = date((SELECT MAX(recorded_date) FROM raw_prices), '-30 days')
+        LEFT JOIN psa10_prices p10_now ON c.id = p10_now.card_id
+            AND p10_now.recorded_date = (SELECT MAX(recorded_date) FROM psa10_prices)
+        LEFT JOIN psa10_prices p10_7d ON c.id = p10_7d.card_id
+            AND p10_7d.recorded_date = date((SELECT MAX(recorded_date) FROM psa10_prices), '-7 days')
+        LEFT JOIN psa10_prices p10_30d ON c.id = p10_30d.card_id
+            AND p10_30d.recorded_date = date((SELECT MAX(recorded_date) FROM psa10_prices), '-30 days')
+        WHERE c.is_active = 1
+    """)
+
+    movers = []
+    for row in cursor.fetchall():
+        r = dict(row)
+        # Calculate percentage changes
+        r["raw_7d_pct"] = round((r["raw_now"] - r["raw_7d_ago"]) / r["raw_7d_ago"] * 100, 1) if r["raw_7d_ago"] else None
+        r["raw_30d_pct"] = round((r["raw_now"] - r["raw_30d_ago"]) / r["raw_30d_ago"] * 100, 1) if r["raw_30d_ago"] else None
+        r["psa10_7d_pct"] = round((r["psa10_now"] - r["psa10_7d_ago"]) / r["psa10_7d_ago"] * 100, 1) if r["psa10_7d_ago"] else None
+        r["psa10_30d_pct"] = round((r["psa10_now"] - r["psa10_30d_ago"]) / r["psa10_30d_ago"] * 100, 1) if r["psa10_30d_ago"] else None
+        movers.append(r)
+
+    conn.close()
+    return {"movers": movers}
+
+
 # --- HTML Pages ---
 
 
@@ -172,6 +222,17 @@ def home(request: Request):
 
     conn.close()
     return templates.TemplateResponse(request, "index.html", {"cards": cards})
+
+
+@app.get("/movers", response_class=HTMLResponse)
+def movers_page(request: Request):
+    """Momentum movers page — biggest price changes."""
+    data = api_movers()
+    leaderboard = api_leaderboard()
+    return templates.TemplateResponse(request, "movers.html", {
+        "movers": data["movers"],
+        "leaderboard": leaderboard["leaderboard"],
+    })
 
 
 @app.get("/card/{card_id}", response_class=HTMLResponse)
