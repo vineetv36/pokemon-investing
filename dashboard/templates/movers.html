@@ -106,7 +106,7 @@
                     </td>
                     <td class="price">
                         {% if m.psa10_now %}
-                        ${{ "{:,.0f}" | format(m.psa10_now) }}
+                        ${{ "{:,.0f}".format(m.psa10_now) }}
                         {% else %}<span class="na">-</span>{% endif %}
                     </td>
                     <td>
