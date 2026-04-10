@@ -302,15 +302,19 @@ def backfill(days: int = 180, source: str = "watchlist",
         set_stored = 0
         bulk_success = False
 
-        # Check cache first before hitting the API
-        cache_params = {"set": api_name, "fetchAllInSet": "true",
-                        "includeHistory": "true", "days": days}
-        bulk_data = load_cached_response("/cards", cache_params)
+        # Check cache first (try both includeBoth and history-only)
+        cache_params_both = {"set": api_name, "fetchAllInSet": "true",
+                             "includeBoth": "true", "days": days}
+        cache_params_hist = {"set": api_name, "fetchAllInSet": "true",
+                             "includeHistory": "true", "days": days}
+        bulk_data = load_cached_response("/cards", cache_params_both)
+        if not bulk_data:
+            bulk_data = load_cached_response("/cards", cache_params_hist)
         if bulk_data:
             logger.info("  Loaded from cache for '%s'", api_name)
         else:
             bulk_data = get_all_cards_in_set(
-                api_name, include_history=True, days=days, include_ebay=False)
+                api_name, include_history=True, days=days, include_ebay=True)
 
         if bulk_data:
             bulk_cards = _extract_cards_list(bulk_data)
