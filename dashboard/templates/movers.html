@@ -65,7 +65,7 @@
                 <option value="250" {{ 'selected' if limit == 250 }}>Top 250</option>
                 <option value="9999" {{ 'selected' if limit == 9999 }}>All</option>
             </select>
-            <span class="info">Data: {{ max_raw_date or 'N/A' }}</span>
+            <span class="info">{{ total_cards }} cards tracked</span>
         </div>
 
         <table>
