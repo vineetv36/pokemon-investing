@@ -145,15 +145,27 @@ def api_leaderboard():
 
 
 @app.get("/api/movers")
-def api_movers():
-    """Get biggest price movers — raw, PSA 10, and ratio changes."""
+def api_movers(sort: str = "raw_30d", limit: int = 50):
+    """Get biggest price movers — raw, PSA 10, and ratio changes.
+
+    sort: raw_7d, raw_30d, psa10_7d, psa10_30d, ratio_30d
+    limit: max cards to return (default 50)
+    """
     conn = get_connection()
     cursor = conn.cursor()
 
+    # Pre-compute max dates once
+    cursor.execute("SELECT MAX(recorded_date) FROM raw_prices")
+    max_raw_date = cursor.fetchone()[0]
+    cursor.execute("SELECT MAX(recorded_date) FROM psa10_prices")
+    max_psa_date = cursor.fetchone()[0]
+
+    if not max_raw_date:
+        conn.close()
+        return {"movers": [], "max_raw_date": None, "max_psa_date": None}
+
     cursor.execute("""
         SELECT c.id, c.name, c.set_name, c.card_number,
-            pr.psa10_price, pr.raw_price, pr.ratio,
-            pr.ratio_7d_change, pr.ratio_30d_change,
 
             rp_now.price as raw_now,
             rp_7d.price as raw_7d_ago,
@@ -161,29 +173,26 @@ def api_movers():
 
             p10_now.avg_price as psa10_now,
             p10_7d.avg_price as psa10_7d_ago,
-            p10_30d.avg_price as psa10_30d_ago
+            p10_30d.avg_price as psa10_30d_ago,
+
+            pr.ratio, pr.ratio_7d_change, pr.ratio_30d_change,
+            pr.psa10_price, pr.raw_price
         FROM cards c
-        LEFT JOIN price_ratios pr ON c.id = pr.card_id
-            AND pr.recorded_date = (SELECT MAX(recorded_date) FROM price_ratios)
-        LEFT JOIN raw_prices rp_now ON c.id = rp_now.card_id
-            AND rp_now.recorded_date = (SELECT MAX(recorded_date) FROM raw_prices)
-        LEFT JOIN raw_prices rp_7d ON c.id = rp_7d.card_id
-            AND rp_7d.recorded_date = date((SELECT MAX(recorded_date) FROM raw_prices), '-7 days')
-        LEFT JOIN raw_prices rp_30d ON c.id = rp_30d.card_id
-            AND rp_30d.recorded_date = date((SELECT MAX(recorded_date) FROM raw_prices), '-30 days')
-        LEFT JOIN psa10_prices p10_now ON c.id = p10_now.card_id
-            AND p10_now.recorded_date = (SELECT MAX(recorded_date) FROM psa10_prices)
-        LEFT JOIN psa10_prices p10_7d ON c.id = p10_7d.card_id
-            AND p10_7d.recorded_date = date((SELECT MAX(recorded_date) FROM psa10_prices), '-7 days')
-        LEFT JOIN psa10_prices p10_30d ON c.id = p10_30d.card_id
-            AND p10_30d.recorded_date = date((SELECT MAX(recorded_date) FROM psa10_prices), '-30 days')
-        WHERE c.is_active = 1
-    """)
+        JOIN raw_prices rp_now ON c.id = rp_now.card_id AND rp_now.recorded_date = ?
+        LEFT JOIN raw_prices rp_7d ON c.id = rp_7d.card_id AND rp_7d.recorded_date = date(?, '-7 days')
+        LEFT JOIN raw_prices rp_30d ON c.id = rp_30d.card_id AND rp_30d.recorded_date = date(?, '-30 days')
+        LEFT JOIN psa10_prices p10_now ON c.id = p10_now.card_id AND p10_now.recorded_date = ?
+        LEFT JOIN psa10_prices p10_7d ON c.id = p10_7d.card_id AND p10_7d.recorded_date = date(?, '-7 days')
+        LEFT JOIN psa10_prices p10_30d ON c.id = p10_30d.card_id AND p10_30d.recorded_date = date(?, '-30 days')
+        LEFT JOIN price_ratios pr ON c.id = pr.card_id AND pr.recorded_date = ?
+        WHERE c.is_active = 1 AND rp_now.price > 0
+    """, (max_raw_date, max_raw_date, max_raw_date,
+          max_psa_date or max_raw_date, max_psa_date or max_raw_date, max_psa_date or max_raw_date,
+          max_raw_date))
 
     movers = []
     for row in cursor.fetchall():
         r = dict(row)
-        # Calculate percentage changes
         r["raw_7d_pct"] = round((r["raw_now"] - r["raw_7d_ago"]) / r["raw_7d_ago"] * 100, 1) if r["raw_7d_ago"] else None
         r["raw_30d_pct"] = round((r["raw_now"] - r["raw_30d_ago"]) / r["raw_30d_ago"] * 100, 1) if r["raw_30d_ago"] else None
         r["psa10_7d_pct"] = round((r["psa10_now"] - r["psa10_7d_ago"]) / r["psa10_7d_ago"] * 100, 1) if r["psa10_7d_ago"] else None
@@ -191,7 +200,21 @@ def api_movers():
         movers.append(r)
 
     conn.close()
-    return {"movers": movers}
+
+    # Sort
+    sort_key = {
+        "raw_7d": "raw_7d_pct", "raw_30d": "raw_30d_pct",
+        "psa10_7d": "psa10_7d_pct", "psa10_30d": "psa10_30d_pct",
+        "ratio_30d": "ratio_30d_change",
+    }.get(sort, "raw_30d_pct")
+    movers.sort(key=lambda x: x.get(sort_key) or -9999, reverse=True)
+
+    return {
+        "movers": movers[:limit],
+        "total_cards": len(movers),
+        "max_raw_date": max_raw_date,
+        "max_psa_date": max_psa_date,
+    }
 
 
 # --- HTML Pages ---
@@ -199,10 +222,26 @@ def api_movers():
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    """Main dashboard page."""
+    """Main dashboard page — redirects to movers since that's the primary view."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, set_name, card_number FROM cards WHERE is_active = 1 ORDER BY name")
+    cursor.execute("SELECT COUNT(*) FROM cards WHERE is_active = 1")
+    total = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(DISTINCT card_id) FROM raw_prices")
+    with_prices = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(DISTINCT card_id) FROM daily_sentiment")
+    with_sentiment = cursor.fetchone()[0]
+
+    # Only load top 50 cards for the overview table
+    cursor.execute("""
+        SELECT c.id, c.name, c.set_name, c.card_number
+        FROM cards c
+        JOIN raw_prices rp ON c.id = rp.card_id
+            AND rp.recorded_date = (SELECT MAX(recorded_date) FROM raw_prices WHERE card_id = c.id)
+        WHERE c.is_active = 1
+        ORDER BY rp.price DESC
+        LIMIT 50
+    """)
     cards = [dict(row) for row in cursor.fetchall()]
 
     for card in cards:
@@ -221,17 +260,22 @@ def home(request: Request):
         card["sentiment"] = dict(sent) if sent else {}
 
     conn.close()
-    return templates.TemplateResponse(request, "index.html", {"cards": cards})
+    return templates.TemplateResponse(request, "index.html", {
+        "cards": cards, "total": total, "with_prices": with_prices, "with_sentiment": with_sentiment,
+    })
 
 
 @app.get("/movers", response_class=HTMLResponse)
-def movers_page(request: Request):
+def movers_page(request: Request, sort: str = "raw_30d", limit: int = 50):
     """Momentum movers page — biggest price changes."""
-    data = api_movers()
-    leaderboard = api_leaderboard()
+    data = api_movers(sort=sort, limit=limit)
     return templates.TemplateResponse(request, "movers.html", {
         "movers": data["movers"],
-        "leaderboard": leaderboard["leaderboard"],
+        "total_cards": data["total_cards"],
+        "sort": sort,
+        "limit": limit,
+        "max_raw_date": data.get("max_raw_date"),
+        "max_psa_date": data.get("max_psa_date"),
     })
 
 

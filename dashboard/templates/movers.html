@@ -8,64 +8,39 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; }
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        header { text-align: center; padding: 30px 0; }
+        header { text-align: center; padding: 24px 0 16px; }
         header h1 { font-size: 2rem; color: #fbbf24; }
-        header p { color: #94a3b8; margin-top: 8px; }
-        nav { display: flex; justify-content: center; gap: 16px; margin-bottom: 32px; }
+        header p { color: #94a3b8; margin-top: 4px; }
+        nav { display: flex; justify-content: center; gap: 16px; margin-bottom: 24px; }
         nav a { color: #94a3b8; text-decoration: none; padding: 8px 20px; border-radius: 8px; background: #1e293b; font-weight: 600; transition: all 0.2s; }
         nav a:hover, nav a.active { background: #fbbf24; color: #0f172a; }
-        .section-title { font-size: 1.25rem; color: #fbbf24; margin: 32px 0 16px; padding-bottom: 8px; border-bottom: 1px solid #334155; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; margin-bottom: 32px; }
-        .card { background: #1e293b; border-radius: 12px; padding: 20px; border-left: 4px solid #334155; transition: transform 0.15s; }
-        .card:hover { transform: translateY(-2px); }
-        .card.hot { border-left-color: #ef4444; }
-        .card.rising { border-left-color: #f59e0b; }
-        .card.steady { border-left-color: #22c55e; }
-        .card.cooling { border-left-color: #3b82f6; }
-        .card-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px; }
-        .card-name { font-size: 1.1rem; font-weight: 700; }
-        .card-name a { color: #e2e8f0; text-decoration: none; }
-        .card-name a:hover { color: #fbbf24; }
-        .card-set { font-size: 0.8rem; color: #94a3b8; }
-        .badge { padding: 4px 10px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-        .badge-hot { background: #ef4444; color: white; }
-        .badge-rising { background: #f59e0b; color: #0f172a; }
-        .badge-steady { background: #22c55e; color: white; }
-        .badge-cooling { background: #3b82f6; color: white; }
-        .price-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #334155; }
-        .price-row:last-child { border-bottom: none; }
-        .price-label { font-size: 0.8rem; color: #94a3b8; }
-        .price-value { font-weight: 600; }
-        .pct { font-size: 0.85rem; font-weight: 700; margin-left: 6px; }
-        .pct.up { color: #22c55e; }
-        .pct.down { color: #ef4444; }
-        .pct.flat { color: #64748b; }
-        .momentum-bar { margin-top: 12px; }
-        .momentum-bar-label { font-size: 0.75rem; color: #94a3b8; margin-bottom: 4px; }
-        .momentum-bar-track { height: 6px; background: #334155; border-radius: 3px; overflow: hidden; }
-        .momentum-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
-        .score-hot .momentum-bar-fill { background: linear-gradient(90deg, #f59e0b, #ef4444); }
-        .score-rising .momentum-bar-fill { background: linear-gradient(90deg, #22c55e, #f59e0b); }
-        .score-steady .momentum-bar-fill { background: #22c55e; }
-        .score-cooling .momentum-bar-fill { background: #3b82f6; }
+        .controls { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+        .controls label { font-size: 0.85rem; color: #94a3b8; }
+        .controls select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 6px 12px; font-size: 0.85rem; }
+        .controls .info { margin-left: auto; font-size: 0.85rem; color: #64748b; }
         table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 12px; overflow: hidden; }
         thead { background: #334155; }
-        th { padding: 12px 16px; text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; cursor: pointer; user-select: none; }
-        th:hover { color: #fbbf24; }
-        td { padding: 12px 16px; border-top: 1px solid #334155; }
+        th { padding: 10px 14px; text-align: left; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; white-space: nowrap; }
+        th a { color: #94a3b8; text-decoration: none; }
+        th a:hover, th a.sorted { color: #fbbf24; }
+        td { padding: 10px 14px; border-top: 1px solid #334155; font-size: 0.9rem; white-space: nowrap; }
         tr:hover { background: #334155; }
         a { color: #60a5fa; text-decoration: none; }
-        .na { color: #64748b; }
-        .tabs { display: flex; gap: 8px; margin-bottom: 24px; }
-        .tab { padding: 8px 16px; border-radius: 8px; background: #1e293b; color: #94a3b8; cursor: pointer; font-weight: 600; border: none; font-size: 0.9rem; }
-        .tab.active { background: #334155; color: #fbbf24; }
+        a:hover { text-decoration: underline; }
+        .pct { font-weight: 700; }
+        .up { color: #22c55e; }
+        .down { color: #ef4444; }
+        .flat { color: #64748b; }
+        .na { color: #475569; }
+        .rank { color: #64748b; font-size: 0.8rem; }
+        .price { font-variant-numeric: tabular-nums; }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
             <h1>Momentum Movers</h1>
-            <p>Cards with the biggest price movements and momentum signals</p>
+            <p>Top {{ movers | length }} of {{ total_cards }} cards by price change</p>
         </header>
 
         <nav>
@@ -73,54 +48,48 @@
             <a href="/movers" class="active">Movers</a>
         </nav>
 
-        <!-- Momentum Leaderboard -->
-        <h2 class="section-title">Momentum Leaderboard</h2>
-        <div class="grid">
-            {% for card in leaderboard %}
-            {% set score = card.momentum_score | default(0) %}
-            {% set tier = 'hot' if score >= 70 else ('rising' if score >= 50 else ('steady' if score >= 30 else 'cooling')) %}
-            <div class="card {{ tier }}">
-                <div class="card-header">
-                    <div>
-                        <div class="card-name"><a href="/card/{{ card.id }}">{{ card.name }}</a></div>
-                        <div class="card-set">{{ card.set_name }} #{{ card.card_number }}</div>
-                    </div>
-                    <span class="badge badge-{{ tier }}">
-                        {% if score >= 70 %}STRONG{% elif score >= 50 %}MODERATE{% elif score >= 30 %}WATCH{% else %}NEUTRAL{% endif %}
-                    </span>
-                </div>
-                <div class="momentum-bar score-{{ tier }}">
-                    <div class="momentum-bar-label">Momentum Score: {{ "%.0f" | format(score) }}/100</div>
-                    <div class="momentum-bar-track">
-                        <div class="momentum-bar-fill" style="width: {{ score }}%"></div>
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
+        <div class="controls">
+            <label>Sort by:</label>
+            <select onchange="window.location='/movers?sort='+this.value+'&limit={{ limit }}'">
+                <option value="raw_30d" {{ 'selected' if sort == 'raw_30d' }}>Raw Price 30d %</option>
+                <option value="raw_7d" {{ 'selected' if sort == 'raw_7d' }}>Raw Price 7d %</option>
+                <option value="psa10_30d" {{ 'selected' if sort == 'psa10_30d' }}>PSA 10 Price 30d %</option>
+                <option value="psa10_7d" {{ 'selected' if sort == 'psa10_7d' }}>PSA 10 Price 7d %</option>
+                <option value="ratio_30d" {{ 'selected' if sort == 'ratio_30d' }}>Ratio 30d Change</option>
+            </select>
+            <label>Show:</label>
+            <select onchange="window.location='/movers?sort={{ sort }}&limit='+this.value">
+                <option value="25" {{ 'selected' if limit == 25 }}>Top 25</option>
+                <option value="50" {{ 'selected' if limit == 50 }}>Top 50</option>
+                <option value="100" {{ 'selected' if limit == 100 }}>Top 100</option>
+                <option value="250" {{ 'selected' if limit == 250 }}>Top 250</option>
+                <option value="9999" {{ 'selected' if limit == 9999 }}>All</option>
+            </select>
+            <span class="info">Data: {{ max_raw_date or 'N/A' }}</span>
         </div>
 
-        <!-- Price Movers Table -->
-        <h2 class="section-title">Raw Price Movers (30d)</h2>
         <table>
             <thead>
                 <tr>
+                    <th>#</th>
                     <th>Card</th>
                     <th>Set</th>
-                    <th>Raw Price</th>
-                    <th>7d Change</th>
-                    <th>30d Change</th>
-                    <th>PSA 10 Price</th>
-                    <th>PSA 7d</th>
-                    <th>PSA 30d</th>
-                    <th>Ratio</th>
+                    <th class="price"><a href="/movers?sort=raw_30d&limit={{ limit }}" class="{{ 'sorted' if sort == 'raw_30d' }}">Raw Price</a></th>
+                    <th><a href="/movers?sort=raw_7d&limit={{ limit }}" class="{{ 'sorted' if sort == 'raw_7d' }}">Raw 7d</a></th>
+                    <th><a href="/movers?sort=raw_30d&limit={{ limit }}" class="{{ 'sorted' if sort == 'raw_30d' }}">Raw 30d</a></th>
+                    <th class="price"><a href="/movers?sort=psa10_30d&limit={{ limit }}" class="{{ 'sorted' if sort == 'psa10_30d' }}">PSA 10</a></th>
+                    <th><a href="/movers?sort=psa10_7d&limit={{ limit }}" class="{{ 'sorted' if sort == 'psa10_7d' }}">PSA 7d</a></th>
+                    <th><a href="/movers?sort=psa10_30d&limit={{ limit }}" class="{{ 'sorted' if sort == 'psa10_30d' }}">PSA 30d</a></th>
+                    <th><a href="/movers?sort=ratio_30d&limit={{ limit }}" class="{{ 'sorted' if sort == 'ratio_30d' }}">Ratio</a></th>
                 </tr>
             </thead>
             <tbody>
-                {% for m in movers | sort(attribute='raw_30d_pct', reverse=true) %}
+                {% for m in movers %}
                 <tr>
+                    <td class="rank">{{ loop.index }}</td>
                     <td><a href="/card/{{ m.id }}">{{ m.name }}</a></td>
                     <td>{{ m.set_name }}</td>
-                    <td>${{ "%.0f" | format(m.raw_now or 0) }}</td>
+                    <td class="price">${{ "%.2f" | format(m.raw_now or 0) }}</td>
                     <td>
                         {% if m.raw_7d_pct is not none %}
                         <span class="pct {{ 'up' if m.raw_7d_pct > 0 else ('down' if m.raw_7d_pct < 0 else 'flat') }}">
@@ -135,7 +104,11 @@
                         </span>
                         {% else %}<span class="na">-</span>{% endif %}
                     </td>
-                    <td>${{ "{:,.0f}" | format(m.psa10_now or 0) }}</td>
+                    <td class="price">
+                        {% if m.psa10_now %}
+                        ${{ "{:,.0f}" | format(m.psa10_now) }}
+                        {% else %}<span class="na">-</span>{% endif %}
+                    </td>
                     <td>
                         {% if m.psa10_7d_pct is not none %}
                         <span class="pct {{ 'up' if m.psa10_7d_pct > 0 else ('down' if m.psa10_7d_pct < 0 else 'flat') }}">
@@ -153,113 +126,14 @@
                     <td>
                         {% if m.ratio %}
                         <strong>{{ "%.1f" | format(m.ratio) }}x</strong>
-                        {% else %}<span class="na">-</span>{% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-
-        <!-- PSA 10 Movers Table -->
-        <h2 class="section-title">PSA 10 Price Movers (30d)</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Card</th>
-                    <th>Set</th>
-                    <th>PSA 10 Price</th>
-                    <th>7d Change</th>
-                    <th>30d Change</th>
-                    <th>Raw Price</th>
-                    <th>Raw 7d</th>
-                    <th>Raw 30d</th>
-                    <th>Ratio</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for m in movers | sort(attribute='psa10_30d_pct', reverse=true) %}
-                <tr>
-                    <td><a href="/card/{{ m.id }}">{{ m.name }}</a></td>
-                    <td>{{ m.set_name }}</td>
-                    <td>${{ "{:,.0f}" | format(m.psa10_now or 0) }}</td>
-                    <td>
-                        {% if m.psa10_7d_pct is not none %}
-                        <span class="pct {{ 'up' if m.psa10_7d_pct > 0 else ('down' if m.psa10_7d_pct < 0 else 'flat') }}">
-                            {{ "%+.1f" | format(m.psa10_7d_pct) }}%
-                        </span>
-                        {% else %}<span class="na">-</span>{% endif %}
-                    </td>
-                    <td>
-                        {% if m.psa10_30d_pct is not none %}
-                        <span class="pct {{ 'up' if m.psa10_30d_pct > 0 else ('down' if m.psa10_30d_pct < 0 else 'flat') }}">
-                            {{ "%+.1f" | format(m.psa10_30d_pct) }}%
-                        </span>
-                        {% else %}<span class="na">-</span>{% endif %}
-                    </td>
-                    <td>${{ "%.0f" | format(m.raw_now or 0) }}</td>
-                    <td>
-                        {% if m.raw_7d_pct is not none %}
-                        <span class="pct {{ 'up' if m.raw_7d_pct > 0 else ('down' if m.raw_7d_pct < 0 else 'flat') }}">
-                            {{ "%+.1f" | format(m.raw_7d_pct) }}%
-                        </span>
-                        {% else %}<span class="na">-</span>{% endif %}
-                    </td>
-                    <td>
-                        {% if m.raw_30d_pct is not none %}
-                        <span class="pct {{ 'up' if m.raw_30d_pct > 0 else ('down' if m.raw_30d_pct < 0 else 'flat') }}">
-                            {{ "%+.1f" | format(m.raw_30d_pct) }}%
-                        </span>
-                        {% else %}<span class="na">-</span>{% endif %}
-                    </td>
-                    <td>
-                        {% if m.ratio %}
-                        <strong>{{ "%.1f" | format(m.ratio) }}x</strong>
-                        {% else %}<span class="na">-</span>{% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-
-        <!-- Ratio Movers -->
-        <h2 class="section-title">Ratio Movers (PSA 10 Premium Expanding)</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Card</th>
-                    <th>Set</th>
-                    <th>Ratio</th>
-                    <th>7d Ratio Change</th>
-                    <th>30d Ratio Change</th>
-                    <th>PSA 10</th>
-                    <th>Raw</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for m in movers | sort(attribute='ratio_30d_change', reverse=true) %}
-                {% if m.ratio %}
-                <tr>
-                    <td><a href="/card/{{ m.id }}">{{ m.name }}</a></td>
-                    <td>{{ m.set_name }}</td>
-                    <td><strong>{{ "%.1f" | format(m.ratio) }}x</strong></td>
-                    <td>
-                        {% if m.ratio_7d_change is not none %}
-                        <span class="pct {{ 'up' if m.ratio_7d_change > 0 else ('down' if m.ratio_7d_change < 0 else 'flat') }}">
-                            {{ "%+.2f" | format(m.ratio_7d_change) }}
-                        </span>
-                        {% else %}<span class="na">-</span>{% endif %}
-                    </td>
-                    <td>
                         {% if m.ratio_30d_change is not none %}
-                        <span class="pct {{ 'up' if m.ratio_30d_change > 0 else ('down' if m.ratio_30d_change < 0 else 'flat') }}">
-                            {{ "%+.2f" | format(m.ratio_30d_change) }}
+                        <span class="pct {{ 'up' if m.ratio_30d_change > 0 else ('down' if m.ratio_30d_change < 0 else 'flat') }}" style="font-size:0.75rem">
+                            ({{ "%+.1f" | format(m.ratio_30d_change) }})
                         </span>
+                        {% endif %}
                         {% else %}<span class="na">-</span>{% endif %}
                     </td>
-                    <td>${{ "{:,.0f}" | format(m.psa10_price or 0) }}</td>
-                    <td>${{ "%.0f" | format(m.raw_price or 0) }}</td>
                 </tr>
-                {% endif %}
                 {% endfor %}
             </tbody>
         </table>
